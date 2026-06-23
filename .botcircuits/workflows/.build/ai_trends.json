@@ -1,0 +1,54 @@
+{
+  "name": "ai_trends",
+  "description": "Check current trends in AI using Google Trends, summarize the findings, and write them to a dated results file find_<today>.txt. Unattended; never asks the user anything.",
+  "flow": {
+    "start": "start",
+    "variables": [
+      {
+        "variableName": "trends_findings",
+        "description": "The raw trending AI topics and rising search terms collected from Google Trends."
+      },
+      {
+        "variableName": "trends_report",
+        "description": "The concise human-readable summary of the AI trends, written to the dated results file."
+      }
+    ],
+    "steps": {
+      "start": {
+        "type": "start",
+        "next": "fetch_trends"
+      },
+      "fetch_trends": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Query Google Trends for trending/rising AI topics. Set `trends_findings` to top trending AI queries, their relative interest, and notable rising terms."
+        },
+        "next": "analyze_trends"
+      },
+      "analyze_trends": {
+        "type": "agentAction",
+        "settings": {
+          "action": "From `trends_findings`, set `trends_report`: list top trending AI topics, mark each rising vs. stable, add one-line takeaway on overall AI interest direction."
+        },
+        "next": "save_results"
+      },
+      "save_results": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Write `trends_report` to `find_<today>.txt` in cwd (<today>=YYYY-MM-DD, e.g. find_2026-06-22.txt). Unattended; ask nothing."
+        }
+      }
+    },
+    "segments": [
+      {
+        "id": "start",
+        "steps": [
+          "fetch_trends",
+          "analyze_trends",
+          "save_results"
+        ],
+        "branchStep": null
+      }
+    ]
+  }
+}

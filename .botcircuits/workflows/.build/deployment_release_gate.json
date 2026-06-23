@@ -1,0 +1,587 @@
+{
+  "name": "deployment_release_gate",
+  "description": "Unattended DevOps release gate. Reads a release manifest and a list of microservices, runs pre-flight checks (approval, rollback plan, change-freeze window), then for each service deterministically pulls CI/health/incident metrics from the DevOps API and classifies a gate outcome (promote / canary / hold / block / not_found / error). Tallies the batch, notifies on blockers, promotes the green services (canarying first-time ones), and writes a dated release report. If a pre-flight check fails it aborts the whole release and writes an abort report. Never asks the user anything.",
+  "flow": {
+    "start": "start",
+    "variables": [
+      {
+        "variableName": "release_config_file",
+        "description": "Path to the release manifest JSON (release_id, target_environment, approval, budgets, min_services_required). Default: examples/deployment_release_gate/config/release.json.",
+        "dataType": "string"
+      },
+      {
+        "variableName": "services_file",
+        "description": "Path to the plain-text file holding one microservice name per line to gate. Default: examples/deployment_release_gate/services.txt.",
+        "dataType": "string"
+      },
+      {
+        "variableName": "release_approved",
+        "description": "Whether the release manifest is approved for the target environment.",
+        "dataType": "boolean"
+      },
+      {
+        "variableName": "rollback_plan_present",
+        "description": "Whether the manifest documents a rollback plan.",
+        "dataType": "boolean"
+      },
+      {
+        "variableName": "freeze_active",
+        "description": "Whether a global production change freeze is currently in effect.",
+        "dataType": "boolean"
+      },
+      {
+        "variableName": "gate_results",
+        "description": "The list of per-service decided records collected by the gate_services listDecision step.",
+        "dataType": "list"
+      },
+      {
+        "variableName": "promotable_count",
+        "description": "How many services received a promote or canary outcome.",
+        "dataType": "number"
+      },
+      {
+        "variableName": "blocker_count",
+        "description": "How many services received a block, hold, error, or not_found outcome.",
+        "dataType": "number"
+      },
+      {
+        "variableName": "canary_count",
+        "description": "How many services received a canary outcome (first-time deploy, no baseline).",
+        "dataType": "number"
+      },
+      {
+        "variableName": "min_services_required",
+        "description": "Minimum number of promotable services required for the release to proceed.",
+        "dataType": "number"
+      },
+      {
+        "variableName": "lookup_failed",
+        "dataType": "boolean",
+        "description": "True if the service metrics lookup failed, timed out, or returned a non-200/unreadable response."
+      },
+      {
+        "variableName": "not_found",
+        "dataType": "boolean",
+        "description": "True if the service is not registered in the deploy catalog."
+      },
+      {
+        "variableName": "ci_failed",
+        "dataType": "boolean",
+        "description": "True if the latest CI pipeline for the service did not pass."
+      },
+      {
+        "variableName": "has_incident",
+        "dataType": "boolean",
+        "description": "True if the service has one or more open SEV incidents."
+      },
+      {
+        "variableName": "over_error_budget",
+        "dataType": "boolean",
+        "description": "True if the service's error rate exceeds the error budget."
+      },
+      {
+        "variableName": "over_latency_budget",
+        "dataType": "boolean",
+        "description": "True if the service's p95 latency exceeds the latency budget."
+      },
+      {
+        "variableName": "no_baseline",
+        "dataType": "boolean",
+        "description": "True if the service has never been deployed before (no prior baseline)."
+      }
+    ],
+    "steps": {
+      "start": {
+        "type": "start",
+        "next": "load_release_manifest"
+      },
+      "load_release_manifest": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Unattended; do not ask questions. read_file `examples/deployment_release_gate/config/release.json`; extract release_id, target_environment, change_ticket, approved, rollback_plan, error_budget_pct, latency_budget_ms, min_services_required. Set release_approved=approved; rollback_plan_present=true if rollback_plan non-empty; min_services_required from manifest. Verify change_ticket present and rollback_plan documented (pre-flight only, no deploy). GET `http://localhost:4100/v1/freeze`; set freeze_active from response `freeze_active`."
+        },
+        "next": "gate_services",
+        "conditions": [
+          {
+            "condition": "release_approved is false",
+            "next": "abort_release",
+            "expCondition": "release_approved is false"
+          }
+        ],
+        "choices": [
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "release_approved",
+                "operator": "is",
+                "value": false
+              }
+            ],
+            "next": "abort_release"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "rollback_plan_present",
+                "operator": "is",
+                "value": false
+              }
+            ],
+            "next": "abort_release"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "freeze_active",
+                "operator": "is",
+                "value": true
+              }
+            ],
+            "next": "abort_release"
+          }
+        ]
+      },
+      "gate_services": {
+        "type": "listDecision",
+        "settings": {
+          "action": "For each microservice, fetch CI/health/incident metrics from the DevOps API and classify a release-gate outcome."
+        },
+        "itemSource": {
+          "file": "examples/deployment_release_gate/services.txt",
+          "path": ""
+        },
+        "itemFacts": {
+          "kind": "exec",
+          "command": [
+            "python3",
+            "examples/deployment_release_gate/bin/gate_check.py",
+            "--host",
+            "http://localhost:4100/v1",
+            "--error-budget",
+            "1.0",
+            "--latency-budget",
+            "500",
+            "{value}"
+          ],
+          "parse": "json",
+          "derive": {
+            "service": {
+              "from_output": "service",
+              "default": ""
+            },
+            "lookup_failed": {
+              "from_output": "lookup_failed",
+              "default": false
+            },
+            "not_found": {
+              "from_output": "not_found",
+              "default": false
+            },
+            "ci_failed": {
+              "from_output": "ci_failed",
+              "default": false
+            },
+            "has_incident": {
+              "from_output": "has_incident",
+              "default": false
+            },
+            "over_error_budget": {
+              "from_output": "over_error_budget",
+              "default": false
+            },
+            "over_latency_budget": {
+              "from_output": "over_latency_budget",
+              "default": false
+            },
+            "no_baseline": {
+              "from_output": "no_baseline",
+              "default": false
+            },
+            "error_rate": {
+              "from_output": "error_rate",
+              "default": 0
+            },
+            "p95_latency_ms": {
+              "from_output": "p95_latency_ms",
+              "default": 0
+            },
+            "open_sev_incidents": {
+              "from_output": "open_sev_incidents",
+              "default": 0
+            },
+            "needs_attention": {
+              "from_output": "needs_attention",
+              "default": false
+            },
+            "note": {
+              "from_output": "note",
+              "default": ""
+            }
+          }
+        },
+        "itemVariables": [
+          {
+            "variableName": "service",
+            "description": "The microservice name being gated.",
+            "dataType": "string"
+          },
+          {
+            "variableName": "lookup_failed",
+            "description": "true if the metrics lookup failed, timed out, or returned a non-200 / unreadable response.",
+            "dataType": "boolean"
+          },
+          {
+            "variableName": "not_found",
+            "description": "true if the service is not registered in the deploy catalog.",
+            "dataType": "boolean"
+          },
+          {
+            "variableName": "ci_failed",
+            "description": "true if the latest CI pipeline for the service did not pass.",
+            "dataType": "boolean"
+          },
+          {
+            "variableName": "has_incident",
+            "description": "true if the service has one or more open SEV incidents.",
+            "dataType": "boolean"
+          },
+          {
+            "variableName": "over_error_budget",
+            "description": "true if the service's error rate exceeds the error budget.",
+            "dataType": "boolean"
+          },
+          {
+            "variableName": "over_latency_budget",
+            "description": "true if the service's p95 latency exceeds the latency budget.",
+            "dataType": "boolean"
+          },
+          {
+            "variableName": "no_baseline",
+            "description": "true if the service has never been deployed before (no prior baseline).",
+            "dataType": "boolean"
+          },
+          {
+            "variableName": "error_rate",
+            "description": "The service's current error rate, percent.",
+            "dataType": "number"
+          },
+          {
+            "variableName": "p95_latency_ms",
+            "description": "The service's current p95 latency in milliseconds.",
+            "dataType": "number"
+          },
+          {
+            "variableName": "open_sev_incidents",
+            "description": "Number of open SEV incidents on the service.",
+            "dataType": "number"
+          },
+          {
+            "variableName": "needs_attention",
+            "description": "true when the outcome needs human attention (block / hold / error).",
+            "dataType": "boolean"
+          },
+          {
+            "variableName": "note",
+            "description": "A short human-readable note explaining the gate decision.",
+            "dataType": "string"
+          }
+        ],
+        "decisionKey": "outcome",
+        "collectInto": "gate_results",
+        "emit": [
+          "service",
+          "outcome",
+          "error_rate",
+          "p95_latency_ms",
+          "open_sev_incidents",
+          "note",
+          "needs_attention"
+        ],
+        "conditions": [
+          {
+            "condition": "lookup_failed is true",
+            "next": "error",
+            "expCondition": "lookup_failed is true"
+          },
+          {
+            "condition": "not_found is true",
+            "next": "not_found",
+            "expCondition": "not_found is true"
+          },
+          {
+            "condition": "ci_failed is true",
+            "next": "block",
+            "expCondition": "ci_failed is true"
+          },
+          {
+            "condition": "has_incident is true",
+            "next": "block",
+            "expCondition": "has_incident is true"
+          },
+          {
+            "condition": "over_error_budget is true",
+            "next": "hold",
+            "expCondition": "over_error_budget is true"
+          },
+          {
+            "condition": "over_latency_budget is true",
+            "next": "hold",
+            "expCondition": "over_latency_budget is true"
+          },
+          {
+            "condition": "no_baseline is true",
+            "next": "canary",
+            "expCondition": "no_baseline is true"
+          }
+        ],
+        "defaultNext": "promote",
+        "next": "tally_results",
+        "choices": [
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "lookup_failed",
+                "operator": "is",
+                "value": true
+              }
+            ],
+            "next": "error"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "not_found",
+                "operator": "is",
+                "value": true
+              }
+            ],
+            "next": "not_found"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "ci_failed",
+                "operator": "is",
+                "value": true
+              }
+            ],
+            "next": "block"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "has_incident",
+                "operator": "is",
+                "value": true
+              }
+            ],
+            "next": "block"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "over_error_budget",
+                "operator": "is",
+                "value": true
+              }
+            ],
+            "next": "hold"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "over_latency_budget",
+                "operator": "is",
+                "value": true
+              }
+            ],
+            "next": "hold"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "no_baseline",
+                "operator": "is",
+                "value": true
+              }
+            ],
+            "next": "canary"
+          }
+        ],
+        "nullOn": {}
+      },
+      "tally_results": {
+        "type": "agentAction",
+        "settings": {
+          "action": "From `gate_results` records (do not modify): set promotable_count = count of outcome in {promote,canary}; canary_count = count of outcome canary; blocker_count = count of outcome in {block,hold,error,not_found}."
+        },
+        "next": "promote_services",
+        "conditions": [
+          {
+            "condition": "promotable_count is less than min_services_required",
+            "next": "abort_release",
+            "expCondition": "promotable_count less than min_services_required"
+          },
+          {
+            "condition": "blocker_count is greater than 0",
+            "next": "notify_blockers",
+            "expCondition": "blocker_count greater than 0"
+          }
+        ],
+        "choices": [
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "promotable_count",
+                "operator": "less than",
+                "value": "{min_services_required}"
+              }
+            ],
+            "next": "abort_release"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "blocker_count",
+                "operator": "greater than",
+                "value": 0
+              }
+            ],
+            "next": "notify_blockers"
+          }
+        ]
+      },
+      "notify_blockers": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Compose on-call channel notification listing each service with outcome block/hold/error/not_found and its note; page on-call for any service with an open SEV incident."
+        },
+        "next": "promote_services"
+      },
+      "promote_services": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Promote each service with outcome `promote` to target_environment via blue/green strategy; record promoted services. Leave canary/hold/block/error/not_found untouched."
+        },
+        "next": "write_report",
+        "conditions": [
+          {
+            "condition": "canary_count is greater than 0",
+            "next": "canary_rollout",
+            "expCondition": "canary_count greater than 0"
+          }
+        ],
+        "choices": [
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "canary_count",
+                "operator": "greater than",
+                "value": 0
+              }
+            ],
+            "next": "canary_rollout"
+          }
+        ]
+      },
+      "canary_rollout": {
+        "type": "agentAction",
+        "settings": {
+          "action": "For each service with outcome `canary` (first-time, no baseline): route a small traffic percentage, record canary started. Do not full-promote."
+        },
+        "next": "write_report"
+      },
+      "write_report": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Unattended; do not ask questions. Build report object: top `summary` block with release_id, target_environment (from manifest), `total` (count of gate records), `promotable` (promotable_count), `canaried` (canary_count), `blocked` (blocker_count), and `counts` map of records per `outcome` value; then `results` = full `gate_results` list (each: service, outcome, error_rate, p95_latency_ms, open_sev_incidents, note, needs_attention where set). Write as pretty JSON to `release-report-<today>.json` in cwd (<today>=today YYYY-MM-DD, e.g. release-report-2026-06-22.json)."
+        }
+      },
+      "abort_release": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Unattended; do not ask questions. Release aborted at pre-flight/tally gate. Write pretty JSON to `release-abort-<today>.json` in cwd (<today>=today YYYY-MM-DD) capturing abort reason, release_id and target_environment from manifest if available, and any gate_results collected so far."
+        }
+      }
+    },
+    "result": {
+      "kind": "template",
+      "value": {
+        "gate_results": "{gate_results}"
+      }
+    },
+    "segments": [
+      {
+        "id": "start",
+        "steps": [
+          "load_release_manifest"
+        ],
+        "branchStep": "load_release_manifest"
+      },
+      {
+        "id": "abort_release",
+        "steps": [
+          "abort_release"
+        ],
+        "branchStep": null
+      },
+      {
+        "id": "gate_services",
+        "steps": [
+          "gate_services"
+        ],
+        "branchStep": "gate_services"
+      },
+      {
+        "id": "tally_results",
+        "steps": [
+          "tally_results"
+        ],
+        "branchStep": "tally_results"
+      },
+      {
+        "id": "notify_blockers",
+        "steps": [
+          "notify_blockers",
+          "promote_services"
+        ],
+        "branchStep": "promote_services"
+      },
+      {
+        "id": "promote_services",
+        "steps": [
+          "promote_services"
+        ],
+        "branchStep": "promote_services"
+      },
+      {
+        "id": "canary_rollout",
+        "steps": [
+          "canary_rollout",
+          "write_report"
+        ],
+        "branchStep": null
+      },
+      {
+        "id": "write_report",
+        "steps": [
+          "write_report"
+        ],
+        "branchStep": null
+      }
+    ]
+  }
+}

@@ -1,0 +1,366 @@
+"""CLI entry point — argument parsing, provider construction, REPL loop.
+
+Examples:
+  uv run botcircuits-cli
+  uv run botcircuits-cli --provider openai
+  uv run botcircuits-cli --provider gemini --model gemini-2.5-flash
+  uv run botcircuits-cli --no-stream
+  uv run botcircuits-cli --system "You are a personal assistant."
+  uv run botcircuits-cli --config ./custom-settings.json    # explicit override
+  echo "what's 2+2?" | uv run botcircuits-cli --no-stream
+
+Settings files (auto-loaded, lowest to highest precedence):
+  ~/.botcircuits/settings.json            user, applies to all projects
+  ./.botcircuits/settings.json            project, checked into VCS
+  ./.botcircuits/settings.local.json      project, gitignored
+  --config <path>                         explicit override
+  CLI flags                               final word
+
+Manage MCP servers in the settings files (defaults to the project's
+shared file; pass --user or --local to target other layers):
+  uv run botcircuits-cli mcp list
+  uv run botcircuits-cli mcp add fs \\
+      --mode local --transport stdio --command npx \\
+      --args -y,@modelcontextprotocol/server-filesystem,/tmp
+  uv run botcircuits-cli mcp test fs
+  uv run botcircuits-cli mcp remove fs
+
+Slash commands (interactive only):
+  /reset            drop current session and start fresh
+  /session [id]     show or switch session_id
+  /system <text>    set system prompt for new sessions
+  /stream on|off    toggle streaming
+  /tools            list registered tools
+  /help             show commands
+  /quit             exit
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import os
+import sys
+from typing import Optional
+
+from botcircuits.agent import Agent, default_registry, register_workflows
+from botcircuits.agent.workflow import LocalWorkflowError
+from botcircuits.providers import AnthropicProvider, GeminiProvider, OpenAIProvider
+from botcircuits.providers.base import LLMProvider
+from botcircuits.cli.ansi import C, out
+from botcircuits.cli.commands import CLIState, handle_slash
+from botcircuits.cli.commands_mcp import add_mcp_subparser, run_mcp_command
+from botcircuits.cli.commands_manager import add_manager_subparser, run_manager_command
+from botcircuits.cli.commands_workflow import add_workflow_subparser, run_workflow_command
+from botcircuits.cli.config import CLIConfig, ConfigError, resolve
+from botcircuits.cli.render import run_blocking, run_streaming
+from botcircuits.cli.settings import load_layered_settings
+from botcircuits.cli.setup import add_setup_subparser, run_setup_wizard
+from botcircuits.cli.system_prompt import DEFAULT_SYSTEM_PROMPT
+
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+
+_CHAT_FLAGS = (
+    "provider", "model", "system", "session", "stream",
+    "max_tokens", "max_steps", "show_tool_results",
+)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """All chat flags default to None so we can distinguish 'not passed'
+    from 'passed with the default value'. Real defaults live in
+    `config.DEFAULTS` and are applied by `config.resolve()`.
+
+    Subcommands (currently just `mcp`) live under a subparser; running
+    with no subcommand drops into the chat REPL."""
+    p = argparse.ArgumentParser(prog="botcircuits-cli", description="Agent CLI")
+    p.add_argument("--config", default=None,
+                   help="Path to an explicit JSON settings file. Overrides the "
+                        "auto-discovered ~/.botcircuits/ and .botcircuits/ files. "
+                        "CLI flags still win over its values.")
+    p.add_argument("--provider", default=None,
+                   choices=["anthropic", "openai", "gemini"],
+                   help="LLM provider (default: $LLM_PROVIDER or 'anthropic')")
+    p.add_argument("--model", default=None,
+                   help="Override the provider's default model")
+    p.add_argument("--system", default=None, help="System prompt")
+    p.add_argument("--session", default=None,
+                   help="Resume an existing session id (only useful inside one CLI run)")
+
+    # Three-way streaming flag: --stream / --no-stream / unset.
+    stream_group = p.add_mutually_exclusive_group()
+    stream_group.add_argument("--stream", dest="stream", action="store_true",
+                              default=None, help="Force streaming on")
+    stream_group.add_argument("--no-stream", dest="stream", action="store_false",
+                              default=None, help="Disable streaming responses")
+
+    p.add_argument("--max-tokens", type=int, default=None,
+                   help="Per-call token cap (default 4096)")
+    p.add_argument("--max-steps", type=int, default=None,
+                   help="Max tool-use rounds per turn (default 10)")
+
+    # store_const keeps the 'unset' sentinel as None (vs store_true which
+    # would default to False and look like a user choice).
+    p.add_argument("--show-tool-results", dest="show_tool_results",
+                   action="store_const", const=True, default=None,
+                   help="Print full tool result payloads (default: short preview)")
+
+    # --auto skips the y/N gate on every gated tool (shell_exec,
+    # write_file, edit_file, plan_and_confirm). Stays None when not
+    # passed so it doesn't override per-tool `auto` from JSON.
+    p.add_argument("--auto", dest="auto",
+                   action="store_const", const=True, default=None,
+                   help="Skip y/N confirmation on all gated tools "
+                        "(shell_exec, shell_stop, write_file, edit_file, "
+                        "plan_and_confirm). A warning still prints before "
+                        "each action. Overrides per-tool `auto` in JSON.")
+
+    sub = p.add_subparsers(dest="subcommand")
+    add_mcp_subparser(sub)
+    add_workflow_subparser(sub)
+    add_manager_subparser(sub)
+    add_setup_subparser(sub)
+    return p
+
+
+# Tools whose `auto` field should be flipped on by --auto. Every
+# gated tool registers `auto` as a config key — adding one here is the
+# only wiring needed for --auto to cover it.
+_AUTO_GATED_TOOLS = (
+    "shell_exec",
+    "shell_stop",
+    "write_file",
+    "edit_file",
+    "plan_and_confirm",
+    "build_workflow",
+)
+
+
+def load_cli_config(args: argparse.Namespace) -> CLIConfig:
+    """Apply CLI args on top of the layered settings files and return
+    the resolved CLIConfig.
+
+    Settings discovery (lowest to highest precedence):
+        ~/.botcircuits/settings.json
+        ./.botcircuits/settings.json           (project, shared)
+        ./.botcircuits/settings.local.json     (project, gitignored)
+        --config <path>                        (explicit override)
+        CLI flags                              (highest)
+
+    `--auto` is special: it doesn't have its own CLIConfig field, it
+    flows into the `auto` key of every gated tool (shell_exec,
+    write_file, edit_file, plan_and_confirm). We merge it after the
+    normal resolve so it overrides whatever the settings files said.
+    """
+    file_values, _used = load_layered_settings(explicit=args.config)
+    cli_values = {k: getattr(args, k) for k in _CHAT_FLAGS}
+    cfg = resolve(file_values, cli_values)
+
+    if args.auto is not None:
+        for tool_name in _AUTO_GATED_TOOLS:
+            existing = cfg.tools.get(tool_name, {})
+            # Don't resurrect a disabled tool. If the JSON explicitly
+            # set `<tool>: null`, --auto is a no-op for that tool —
+            # the user disabled it on purpose.
+            if existing is None or existing is False:
+                continue
+            tool_cfg = dict(existing) if isinstance(existing, dict) else {}
+            tool_cfg["auto"] = args.auto
+            cfg.tools[tool_name] = tool_cfg
+
+    # Fall back to the code-gen system prompt when the user didn't set one.
+    # Explicitly empty string disables it (lets the user say "no system prompt").
+    if cfg.system is None:
+        cfg.system = DEFAULT_SYSTEM_PROMPT
+
+    return cfg
+
+
+# ---------------------------------------------------------------------------
+# Provider construction
+# ---------------------------------------------------------------------------
+
+def make_provider(kind: str, model: Optional[str]) -> LLMProvider:
+    if kind == "anthropic":
+        return AnthropicProvider(model=model or os.getenv("ANTHROPIC_MODEL", "claude-opus-4-7"))
+    if kind == "openai":
+        return OpenAIProvider(model=model or os.getenv("OPENAI_MODEL", "gpt-4.1"))
+    if kind == "gemini":
+        return GeminiProvider(model=model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
+    raise ValueError(f"Unknown provider: {kind}")
+
+
+# ---------------------------------------------------------------------------
+# Input handling — non-blocking line reads + multi-line paste support
+# ---------------------------------------------------------------------------
+
+async def read_line(prompt: str) -> Optional[str]:
+    """Read one line from stdin without blocking the event loop.
+    Returns None on EOF (Ctrl-D)."""
+    loop = asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(None, lambda: input(prompt))
+    except EOFError:
+        return None
+    except KeyboardInterrupt:
+        out()                     # newline after the ^C
+        return ""                 # treat as empty line; outer loop ignores
+
+
+async def read_user_message(interactive: bool) -> Optional[str]:
+    """One user 'message' = one line, OR a multi-line block delimited by '\"\"\"'.
+    Returns None on EOF."""
+    first = await read_line(C.bold(C.green("you> ")) if interactive else "")
+    if first is None:
+        return None
+    stripped = first.strip()
+    if stripped == '"""':
+        # Multi-line block: read until the closing """
+        lines = []
+        while True:
+            ln = await read_line(C.dim("... "))
+            if ln is None or ln.strip() == '"""':
+                break
+            lines.append(ln)
+        return "\n".join(lines)
+    return first
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+async def amain(args: argparse.Namespace) -> int:
+    try:
+        cfg = load_cli_config(args)
+    except ConfigError as e:
+        out(C.red(f"[config] {e}"))
+        return 2
+
+    state = CLIState(cfg)
+    interactive = sys.stdin.isatty()
+    provider = make_provider(cfg.provider, cfg.model)
+
+    try:
+        registry = default_registry(cfg.tools, provider=provider)
+    except ValueError as e:
+        out(C.red(f"[tools] {e}"))
+        return 2
+
+    try:
+        normalize_enabled = bool(cfg.workflow.get("normalize", True))
+        registered, skipped = await register_workflows(
+            registry,
+            provider=provider,
+            normalize_enabled=normalize_enabled,
+        )
+        if interactive and registered:
+            note = "" if normalize_enabled else " (normalize=off)"
+            out(C.dim(f"workflows: {', '.join(registered)}{note}"))
+        if skipped:
+            out(C.yellow(
+                f"[workflow] skipped (name collides with built-in tool): "
+                f"{', '.join(skipped)}"
+            ))
+    except LocalWorkflowError as e:
+        out(C.red(f"[workflow] {e}"))
+        return 2
+
+    async with Agent(
+        provider=provider,
+        tools=registry,
+        mcp_servers=cfg.mcp_servers,
+        max_tokens=cfg.max_tokens,
+        max_steps=cfg.max_steps,
+        mode=cfg.mode,
+    ) as agent:
+
+        if interactive:
+            tools = agent.tools.all()
+            out(C.dim(f"provider: {cfg.provider}"
+                      f"  |  model: {provider.model}"
+                      f"  |  streaming: {state.stream}"
+                      f"  |  tools: {len(tools)}"))
+            out(C.dim("type /help for commands, Ctrl-D to exit\n"))
+
+        while True:
+            msg = await read_user_message(interactive)
+            if msg is None:
+                if interactive:
+                    out()  # newline after Ctrl-D
+                return 0
+            if not msg.strip():
+                if interactive:
+                    continue
+                # piped blank line → skip it and keep reading (a multi-turn
+                # script may separate turns with blank lines). EOF (msg is None,
+                # handled above) is what ends a piped run.
+                continue
+
+            if msg.startswith("/"):
+                if interactive:
+                    try:
+                        _handled, follow_up = await handle_slash(msg, agent, state)
+                    except SystemExit:
+                        return 0
+                    # Lazy-tool triggers (e.g. /workflow) return a follow-up
+                    # prompt that should be dispatched as a normal chat
+                    # message — the freshly registered tool will be on the
+                    # registry by the time the provider call happens.
+                    if follow_up:
+                        msg = follow_up
+                    else:
+                        continue
+                # In piped mode, slash commands aren't meaningful; treat as text.
+
+            try:
+                if state.stream:
+                    await run_streaming(agent, msg, state)
+                else:
+                    await run_blocking(agent, msg, state)
+            except KeyboardInterrupt:
+                out()
+                out(C.yellow("(interrupted)"))
+                # session keeps going
+
+            # Session-cumulative REAL token usage, one machine-parseable line
+            # per turn (the last one wins for whole-run totals). Counted at the
+            # provider level so Layer-B normalization / workflow-indexer calls
+            # are included. Color auto-disables when piped, so downstream
+            # harnesses can parse the plain text. input_tokens is the TOTAL
+            # prompt size; the cache counters break out the portion served
+            # from / written to the prompt cache (billed at vendor discounts).
+            out(C.dim(
+                f"[usage] llm_calls={provider.usage_llm_calls} "
+                f"input_tokens={provider.usage_input_tokens} "
+                f"output_tokens={provider.usage_output_tokens} "
+                f"cache_read_tokens={provider.usage_cache_read_tokens} "
+                f"cache_write_tokens={provider.usage_cache_write_tokens}"
+            ))
+
+            # Piped mode used to stop after one message. Instead, keep reading:
+            # each subsequent stdin line is the next turn of a scripted
+            # multi-turn run, sharing this process's in-memory session (so the
+            # workflow / conversation state carries across turns). The loop ends
+            # at EOF (read_user_message returns None, handled at the top).
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    try:
+        if args.subcommand == "mcp":
+            rc = run_mcp_command(args)
+        elif args.subcommand == "workflow":
+            rc = run_workflow_command(args)
+        elif args.subcommand == "manager":
+            rc = run_manager_command(args)
+        elif args.subcommand == "setup":
+            rc = run_setup_wizard(args)
+        else:
+            rc = asyncio.run(amain(args))
+    except KeyboardInterrupt:
+        rc = 130
+    sys.exit(rc)

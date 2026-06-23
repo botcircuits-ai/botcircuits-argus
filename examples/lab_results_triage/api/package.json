@@ -1,0 +1,10 @@
+{
+  "name": "lab-results-triage-mock-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Mock clinical lab / EHR API for the lab_results_triage workflow example.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

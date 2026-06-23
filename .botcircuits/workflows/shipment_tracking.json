@@ -1,0 +1,99 @@
+{
+  "name": "shipment_tracking",
+  "description": "Unattended batch parcel-status check. Reads a text file of tracking numbers (one per line), looks each up against the carrier API deterministically, classifies an outcome per parcel (delivered / out_for_delivery / in_transit / delayed / escalate / not_found / error), and writes a single dated results file with a per-outcome summary. Never asks the user anything.",
+  "flow": {
+    "start": "start",
+    "variables": [
+      {
+        "variableName": "tracking_file",
+        "description": "Path to the plain-text file holding one tracking number per line. Default: examples/shipment_tracking/tracking-ids.txt. To process a different batch, point the decide_parcels step's itemSource.file at another file.",
+        "dataType": "string"
+      },
+      {
+        "variableName": "tracking_results",
+        "description": "The list of decided records, one per tracking number, collected by the decide_parcels listDecision step."
+      }
+    ],
+    "steps": {
+      "start": {
+        "type": "start",
+        "next": "decide_parcels"
+      },
+      "decide_parcels": {
+        "type": "listDecision",
+        "settings": {
+          "action": "For each tracking number, look up its live status from the carrier API and classify an outcome."
+        },
+        "itemSource": {
+          "file": "examples/shipment_tracking/tracking-ids.txt",
+          "path": ""
+        },
+        "itemFacts": {
+          "kind": "exec",
+          "command": [
+            "python3",
+            "examples/shipment_tracking/bin/track.py",
+            "--host",
+            "http://localhost:4000/v1",
+            "--threshold",
+            "7",
+            "{value}"
+          ],
+          "parse": "json",
+          "derive": {
+            "tracking_number": { "from_output": "tracking_number", "default": "" },
+            "lookup_failed": { "from_output": "lookup_failed", "default": false },
+            "not_found": { "from_output": "not_found", "default": false },
+            "status": { "from_output": "status", "default": "" },
+            "last_location": { "from_output": "last_location", "default": "" },
+            "estimated_delivery": { "from_output": "estimated_delivery", "default": "" },
+            "is_delayed": { "from_output": "is_delayed", "default": false },
+            "needs_attention": { "from_output": "needs_attention", "default": false },
+            "note": { "from_output": "note", "default": "" }
+          }
+        },
+        "itemVariables": [
+          { "variableName": "tracking_number", "description": "The carrier tracking number for this parcel.", "dataType": "string" },
+          { "variableName": "lookup_failed", "description": "true if the carrier lookup failed, timed out, or returned a non-200 / empty response.", "dataType": "boolean" },
+          { "variableName": "not_found", "description": "true if the carrier says the tracking number is not found / invalid.", "dataType": "boolean" },
+          { "variableName": "status", "description": "The carrier status text, e.g. delivered, out for delivery, in transit, exception, returned, lost.", "dataType": "string" },
+          { "variableName": "last_location", "description": "The parcel's last known location reported by the carrier.", "dataType": "string" },
+          { "variableName": "estimated_delivery", "description": "The carrier's estimated delivery date (ISO YYYY-MM-DD), if any.", "dataType": "string" },
+          { "variableName": "is_delayed", "description": "true if the parcel is in transit and its estimated delivery is more than the 7-day threshold away.", "dataType": "boolean" },
+          { "variableName": "needs_attention", "description": "true when the outcome needs human attention (delayed or escalate).", "dataType": "boolean" },
+          { "variableName": "note", "description": "A short human-readable note describing the parcel's status.", "dataType": "string" }
+        ],
+        "decisionKey": "outcome",
+        "collectInto": "tracking_results",
+        "emit": [
+          "tracking_number",
+          "outcome",
+          "status",
+          "last_location",
+          "estimated_delivery",
+          "note",
+          "needs_attention"
+        ],
+        "conditions": [
+          { "condition": "lookup_failed is true", "next": "error" },
+          { "condition": "not_found is true", "next": "not_found" },
+          { "condition": "status is delivered", "next": "delivered" },
+          { "condition": "status is out for delivery", "next": "out_for_delivery" },
+          { "condition": "is_delayed is true", "next": "delayed" },
+          { "condition": "status is in transit", "next": "in_transit" },
+          { "condition": "status is exception", "next": "escalate" },
+          { "condition": "status is returned", "next": "escalate" },
+          { "condition": "status is lost", "next": "escalate" }
+        ],
+        "defaultNext": "in_transit",
+        "next": "save_results"
+      },
+      "save_results": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Read the decided records in the `tracking_results` slot. Build a results object with a `summary` block at the top — `total` (the number of records) and a `counts` map giving how many records fall under each `outcome` value — followed by `results` (the full list of records, each with tracking_number, outcome, status, last_location, estimated_delivery, note, and needs_attention where set). Write this object as pretty JSON to a file named `tracking-status-<today>.json` in the current working directory, where <today> is today's date in YYYY-MM-DD format (e.g. tracking-status-2026-06-22.json). Do not ask any questions; this is an unattended batch run."
+        }
+      }
+    }
+  }
+}

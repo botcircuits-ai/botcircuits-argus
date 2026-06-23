@@ -1,0 +1,729 @@
+{
+  "name": "loan_triage_inline_v1",
+  "description": "Complex inline evaluation: 50+ step loan-application triage workflow built from a natural-language spec, then driven by simulated chat turns. Each turn supplies a raw user message (no pre-normalized args) so the workflow's slot-extraction layer (Layer B) is exercised end-to-end. The prompt-only baseline drives the same generated STM in pure prose.",
+  "workflow": "loan_triage",
+  "workflow_spec": "Build a workflow named `loan_triage` that triages a personal-loan application end-to-end. The workflow MUST contain at least the following steps as separate agentAction states, in this order; each step is one state whose `action` is a single sentence telling the agent what to ask or do, and conditions are inline `conditions` (no separate `choice` states).\n\nINTAKE PHASE (one question per step, ask the user and wait for the reply):\n1. ask_full_name — ask the applicant's full legal name (variable: full_name, string).\n2. ask_age — ask their age in years (variable: age, number).\n3. check_age — if age is less than 18, branch to `reject_under_age`; otherwise continue to ask_country.\n4. ask_country — ask the country they currently live in (variable: country, string).\n5. ask_residency_status — ask their residency status, one of: citizen, resident, visa, tourist, other (variable: residency_status, string).\n6. check_residency — if residency_status is `tourist` or `other`, branch to `reject_residency`; otherwise continue to ask_employment_status.\n7. ask_employment_status — one of: employed, self_employed, contractor, unemployed, retired, student (variable: employment_status, string).\n8. check_employment — if employment_status is `unemployed` or `student`, branch to `reject_no_income`; otherwise continue to ask_occupation.\n9. ask_occupation — ask their occupation or job title (variable: occupation, string).\n10. ask_employer_name — ask the name of their employer or business (variable: employer_name, string).\n11. ask_years_at_employer — ask how many years they have been with that employer (variable: years_at_employer, number).\n12. ask_monthly_income — ask their gross monthly income in USD (variable: monthly_income, number).\n13. ask_loan_purpose — ask the purpose of the loan, free text (variable: loan_purpose, string).\n\nLOAN PARAMETERS:\n14. ask_loan_amount — ask the loan amount they want in USD (variable: loan_amount, number).\n15. ask_loan_term — ask the loan term in months (variable: loan_term_months, number).\n16. ask_interest_preference — ask whether they prefer a fixed or variable interest rate, one of: fixed, variable (variable: interest_preference, string).\n17. ask_has_collateral — ask whether they will offer collateral, yes or no (variable: has_collateral, boolean).\n18. check_collateral — if has_collateral is true, continue to ask_collateral_type; otherwise jump to ask_credit_score.\n19. ask_collateral_type — ask what kind of collateral (free text such as car, property, savings) (variable: collateral_type, string).\n\nCREDIT PROFILE:\n20. ask_credit_score — ask their most recent credit score, a number between 300 and 850 (variable: credit_score, number).\n21. ask_has_existing_loans — ask whether they currently have any outstanding loans, yes or no (variable: has_existing_loans, boolean).\n22. ask_total_existing_debt — ask the total monthly debt payments they currently make in USD (variable: total_existing_debt, number).\n23. ask_has_bankruptcy — ask whether they have ever filed for personal bankruptcy in the last 7 years, yes or no (variable: has_bankruptcy, boolean).\n24. check_bankruptcy — if has_bankruptcy is true, branch to `reject_bankruptcy`; otherwise continue to ask_missed_payments.\n25. ask_missed_payments — ask whether they have any missed loan or credit-card payments in the last 12 months, yes or no (variable: has_missed_payments, boolean).\n26. ask_missed_payments_count — if has_missed_payments is true ask how many; otherwise this step is still entered but immediately routes onward (variable: missed_payments_count, number).\n27. ask_savings_balance — ask their total savings account balance in USD (variable: savings_balance, number).\n28. ask_checking_balance — ask their current checking account balance in USD (variable: checking_balance, number).\n\nRISK BRANCHES — each of these is an agentAction state whose action tells the agent to evaluate the rule against the variables collected so far, and whose conditions route based on the slots, NOT on a re-asked question:\n29. evaluate_dti_ratio — compute the debt-to-income ratio as (total_existing_debt + (loan_amount / loan_term_months)) divided by monthly_income, multiplied by 100; the agent should set a variable `dti_pct` (number) reflecting that.\n30. check_dti — if dti_pct is greater than 50, branch to `reject_dti`; if dti_pct is greater than 40 and less than or equal to 50, branch to `manual_review_high_dti`; otherwise continue to check_credit_band.\n31. check_credit_band — branch on credit_score: if credit_score is less than 580 go to `reject_subprime`; if credit_score is greater than or equal to 580 and less than 670 go to `manual_review_fair`; if credit_score is greater than or equal to 670 and less than 740 go to `assign_tier3`; if credit_score is greater than or equal to 740 and less than 800 go to `assign_tier2`; if credit_score is greater than or equal to 800 go to `assign_tier1`.\n32. check_employment_stability — only reached from manual_review paths or tier assignments via the convergence point below; if years_at_employer is less than 1 and loan_amount is greater than 50000, branch to `manual_review_short_tenure`; otherwise continue to the relevant tier's confirmation step.\n33. check_loan_amount_cap — if loan_amount is greater than 500000, branch to `manual_review_large_amount`; otherwise continue.\n34. check_missed_payments — if missed_payments_count is greater than or equal to 3, branch to `reject_missed_payments`; if missed_payments_count is 1 or 2, branch to `manual_review_missed_payments`; otherwise continue.\n\nTIER ASSIGNMENT + RATE:\n35. assign_tier1 — set the user-facing message to 'Tier 1 — best rate available', then proceed.\n36. assign_tier2 — set the user-facing message to 'Tier 2 — competitive rate', then proceed.\n37. assign_tier3 — set the user-facing message to 'Tier 3 — standard rate', then proceed.\n38. ask_insurance — ask whether they want optional payment-protection insurance, yes or no (variable: wants_insurance, boolean).\n39. ask_cosigner — ask whether they have a co-signer available, yes or no (variable: has_cosigner, boolean).\n40. quote_rate — tell the user their indicative APR derived from the tier and whether insurance and a co-signer were chosen.\n\nDOCUMENTS + APPROVAL:\n41. request_documents — tell the user which documents to upload (last 3 months of pay stubs, government ID, address proof). Variable: documents_ready (boolean) captures whether they confirm they have them.\n42. check_documents_ready — if documents_ready is false, branch to `pending_documents`; otherwise continue.\n43. confirm_terms — recap the loan amount, term, APR, monthly payment, and ask the user to type 'I accept' to confirm (variable: terms_accepted, boolean).\n44. check_terms_accepted — if terms_accepted is false, branch to `cancelled_by_user`; otherwise continue.\n45. final_approval — tell the user the loan is APPROVED and include the loan_amount, loan_term_months, and the tier in the message.\n\nMANUAL-REVIEW HANDOFFS (each is a terminal agentAction):\n46. manual_review_fair — tell the user their application has been queued for MANUAL REVIEW (fair credit band) and that a loan officer will contact them.\n47. manual_review_high_dti — tell the user their application has been queued for MANUAL REVIEW (high DTI).\n48. manual_review_short_tenure — tell the user their application has been queued for MANUAL REVIEW (employment tenure under 1 year).\n49. manual_review_large_amount — tell the user their application has been queued for MANUAL REVIEW (loan amount above 500k cap).\n50. manual_review_missed_payments — tell the user their application has been queued for MANUAL REVIEW (recent missed payments).\n\nREJECTION TERMINALS — each is its own agentAction state with no `next`:\n51. reject_under_age — tell the user the application is DENIED because they must be 18 or older.\n52. reject_residency — tell the user the application is DENIED because their residency status is not eligible.\n53. reject_no_income — tell the user the application is DENIED because they do not have a qualifying source of income.\n54. reject_bankruptcy — tell the user the application is DENIED because of a recent bankruptcy.\n55. reject_dti — tell the user the application is DENIED because the debt-to-income ratio exceeds 50%.\n56. reject_subprime — tell the user the application is DENIED because the credit score is below 580.\n57. reject_missed_payments — tell the user the application is DENIED because of three or more missed payments in the last 12 months.\n58. pending_documents — tell the user the application is on hold until they upload the required documents.\n59. cancelled_by_user — tell the user the application was CANCELLED because they did not accept the terms.\n\nNotes for the author: there is no separate `choice` state type — every branch above must live as `conditions` inside the `agentAction` it belongs to. Every state listed above must exist; do not collapse them. The variables list must include each variable named above with its declared dataType (string, number, or boolean). The start step should be a `start` state pointing at `ask_full_name`. IMPORTANT for branching: every `condition` string must be a positive predicate naming the variable and value (e.g. \"age is less than 18\", \"residency_status is tourist or other\", \"dti_pct is greater than 50\"). Do NOT write conditions whose text is just \"otherwise\" or \"else\" — for the default branch, omit the condition entirely and put the fall-through target as the state's `next` field. Every branching state MUST have a `next` field pointing at the fall-through state so the engine has a default target when no condition matches.",
+  "cases": [
+    {
+      "id": "loan.happy_path_tier2",
+      "description": "Clean tier-2 applicant who accepts terms. Should reach final_approval without any manual review or rejection branch.",
+      "initial_args": {},
+      "initial_user_text": "Hi, I'd like to apply for a personal loan. My name is Maya Patel.",
+      "turns": [
+        {
+          "args": {},
+          "user_text": "I'm 34 years old."
+        },
+        {
+          "args": {},
+          "user_text": "I live in the United States."
+        },
+        {
+          "args": {},
+          "user_text": "I'm a US citizen."
+        },
+        {
+          "args": {},
+          "user_text": "I'm employed full-time."
+        },
+        {
+          "args": {},
+          "user_text": "I work as a senior software engineer."
+        },
+        {
+          "args": {},
+          "user_text": "My employer is Acme Robotics."
+        },
+        {
+          "args": {},
+          "user_text": "I've been there for about 5 years now."
+        },
+        {
+          "args": {},
+          "user_text": "My monthly income is around 12,000 dollars before tax."
+        },
+        {
+          "args": {},
+          "user_text": "I want the loan to consolidate two credit cards into one payment."
+        },
+        {
+          "args": {},
+          "user_text": "I'd like to borrow forty thousand dollars."
+        },
+        {
+          "args": {},
+          "user_text": "Sixty months would be ideal."
+        },
+        {
+          "args": {},
+          "user_text": "Fixed rate please."
+        },
+        {
+          "args": {},
+          "user_text": "No, I won't be offering any collateral."
+        },
+        {
+          "args": {},
+          "user_text": "My most recent FICO is 765."
+        },
+        {
+          "args": {},
+          "user_text": "Yes, I have one outstanding auto loan."
+        },
+        {
+          "args": {},
+          "user_text": "About $850 a month total."
+        },
+        {
+          "args": {},
+          "user_text": "No, I've never filed for bankruptcy."
+        },
+        {
+          "args": {},
+          "user_text": "No missed payments in the last year."
+        },
+        {
+          "args": {},
+          "user_text": "Zero missed payments."
+        },
+        {
+          "args": {},
+          "user_text": "I have around $22,000 in savings."
+        },
+        {
+          "args": {},
+          "user_text": "Roughly $4,500 in checking right now."
+        },
+        {
+          "args": {},
+          "user_text": "Yes I'd like the payment protection insurance."
+        },
+        {
+          "args": {},
+          "user_text": "No co-signer, just me."
+        },
+        {
+          "args": {},
+          "user_text": "Yes I have all the documents ready to upload."
+        },
+        {
+          "args": {},
+          "user_text": "I accept the terms."
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        }
+      ],
+      "expected": {
+        "must_contain": [
+          "APPROVED"
+        ]
+      }
+    },
+    {
+      "id": "loan.reject_under_age",
+      "description": "17-year-old applicant. Should fail at the check_age branch and terminate at reject_under_age.",
+      "initial_args": {},
+      "initial_user_text": "Hi, my name is Sam Reed and I want to apply for a loan.",
+      "turns": [
+        {
+          "args": {},
+          "user_text": "I just turned 17 last month."
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        }
+      ],
+      "expected": {
+        "must_contain": [
+          "DENIED",
+          "18"
+        ]
+      }
+    },
+    {
+      "id": "loan.reject_bankruptcy",
+      "description": "Applicant with a recent bankruptcy. Should reach reject_bankruptcy after the check_bankruptcy branch.",
+      "initial_args": {},
+      "initial_user_text": "My name is Jordan Lee, I'd like to apply.",
+      "turns": [
+        {
+          "args": {},
+          "user_text": "I'm 41."
+        },
+        {
+          "args": {},
+          "user_text": "Canada."
+        },
+        {
+          "args": {},
+          "user_text": "Resident."
+        },
+        {
+          "args": {},
+          "user_text": "Employed full time."
+        },
+        {
+          "args": {},
+          "user_text": "Project manager."
+        },
+        {
+          "args": {},
+          "user_text": "Initech Corp."
+        },
+        {
+          "args": {},
+          "user_text": "Eight years."
+        },
+        {
+          "args": {},
+          "user_text": "Around 9000 CAD per month, call it 6800 USD."
+        },
+        {
+          "args": {},
+          "user_text": "Home renovation."
+        },
+        {
+          "args": {},
+          "user_text": "$25,000."
+        },
+        {
+          "args": {},
+          "user_text": "48 months."
+        },
+        {
+          "args": {},
+          "user_text": "Variable."
+        },
+        {
+          "args": {},
+          "user_text": "No collateral."
+        },
+        {
+          "args": {},
+          "user_text": "FICO 710."
+        },
+        {
+          "args": {},
+          "user_text": "No existing loans."
+        },
+        {
+          "args": {},
+          "user_text": "Zero."
+        },
+        {
+          "args": {},
+          "user_text": "Yes — I filed for personal bankruptcy about three years ago."
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        }
+      ],
+      "expected": {
+        "must_contain": [
+          "DENIED",
+          "bankruptcy"
+        ]
+      }
+    },
+    {
+      "id": "loan.reject_subprime_credit",
+      "description": "Applicant with sub-580 credit score should hit reject_subprime via check_credit_band.",
+      "initial_args": {},
+      "initial_user_text": "I'm Priya Shah and I'd like to apply for a personal loan.",
+      "turns": [
+        {
+          "args": {},
+          "user_text": "I'm 29."
+        },
+        {
+          "args": {},
+          "user_text": "United Kingdom."
+        },
+        {
+          "args": {},
+          "user_text": "Citizen."
+        },
+        {
+          "args": {},
+          "user_text": "Self employed."
+        },
+        {
+          "args": {},
+          "user_text": "Freelance designer."
+        },
+        {
+          "args": {},
+          "user_text": "Self — own studio."
+        },
+        {
+          "args": {},
+          "user_text": "3 years."
+        },
+        {
+          "args": {},
+          "user_text": "Around £3500 per month, equivalent to about $4400."
+        },
+        {
+          "args": {},
+          "user_text": "Buying new equipment."
+        },
+        {
+          "args": {},
+          "user_text": "Fifteen thousand dollars."
+        },
+        {
+          "args": {},
+          "user_text": "36 months."
+        },
+        {
+          "args": {},
+          "user_text": "Fixed."
+        },
+        {
+          "args": {},
+          "user_text": "No."
+        },
+        {
+          "args": {},
+          "user_text": "My most recent score is 540."
+        },
+        {
+          "args": {},
+          "user_text": "No existing loans."
+        },
+        {
+          "args": {},
+          "user_text": "Zero monthly debt."
+        },
+        {
+          "args": {},
+          "user_text": "No bankruptcy."
+        },
+        {
+          "args": {},
+          "user_text": "No missed payments."
+        },
+        {
+          "args": {},
+          "user_text": "0."
+        },
+        {
+          "args": {},
+          "user_text": "About $3000 savings."
+        },
+        {
+          "args": {},
+          "user_text": "About $900 checking."
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        }
+      ],
+      "expected": {
+        "must_contain": [
+          "DENIED",
+          "580"
+        ]
+      }
+    },
+    {
+      "id": "loan.manual_review_high_dti",
+      "description": "Applicant whose debt-to-income ratio computes between 40% and 50%. Should route to manual_review_high_dti instead of approval or outright rejection.",
+      "initial_args": {},
+      "initial_user_text": "Hi, I'm Devon Carter, applying for a loan.",
+      "turns": [
+        {
+          "args": {},
+          "user_text": "I'm 45."
+        },
+        {
+          "args": {},
+          "user_text": "USA."
+        },
+        {
+          "args": {},
+          "user_text": "Citizen."
+        },
+        {
+          "args": {},
+          "user_text": "Employed."
+        },
+        {
+          "args": {},
+          "user_text": "Nurse practitioner."
+        },
+        {
+          "args": {},
+          "user_text": "Greenfield Hospital."
+        },
+        {
+          "args": {},
+          "user_text": "12 years."
+        },
+        {
+          "args": {},
+          "user_text": "$7000 per month."
+        },
+        {
+          "args": {},
+          "user_text": "Medical bills consolidation."
+        },
+        {
+          "args": {},
+          "user_text": "$30,000."
+        },
+        {
+          "args": {},
+          "user_text": "60 months."
+        },
+        {
+          "args": {},
+          "user_text": "Fixed."
+        },
+        {
+          "args": {},
+          "user_text": "No collateral."
+        },
+        {
+          "args": {},
+          "user_text": "FICO 705."
+        },
+        {
+          "args": {},
+          "user_text": "Yes — mortgage and auto loan."
+        },
+        {
+          "args": {},
+          "user_text": "$2700 a month combined."
+        },
+        {
+          "args": {},
+          "user_text": "No bankruptcy."
+        },
+        {
+          "args": {},
+          "user_text": "No missed payments."
+        },
+        {
+          "args": {},
+          "user_text": "0."
+        },
+        {
+          "args": {},
+          "user_text": "$8000 savings."
+        },
+        {
+          "args": {},
+          "user_text": "$2200 checking."
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        }
+      ],
+      "expected": {
+        "must_contain": [
+          "MANUAL REVIEW",
+          "DTI"
+        ]
+      }
+    }
+  ]
+}

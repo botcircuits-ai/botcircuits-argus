@@ -1,0 +1,343 @@
+{
+  "name": "shipment_tracking",
+  "description": "Unattended batch parcel-status check. Reads a text file of tracking numbers (one per line), looks each up against the carrier API deterministically, classifies an outcome per parcel (delivered / out_for_delivery / in_transit / delayed / escalate / not_found / error), and writes a single dated results file with a per-outcome summary. Never asks the user anything.",
+  "flow": {
+    "start": "start",
+    "variables": [
+      {
+        "variableName": "tracking_file",
+        "description": "Path to the plain-text file holding one tracking number per line. Default: examples/shipment_tracking/tracking-ids.txt. To process a different batch, point the decide_parcels step's itemSource.file at another file.",
+        "dataType": "string"
+      },
+      {
+        "variableName": "tracking_results",
+        "description": "The list of decided records, one per tracking number, collected by the decide_parcels listDecision step.",
+        "dataType": "string"
+      },
+      {
+        "variableName": "lookup_failed",
+        "dataType": "boolean",
+        "description": "true if the carrier lookup failed, timed out, or returned a non-200 / empty response."
+      },
+      {
+        "variableName": "not_found",
+        "dataType": "boolean",
+        "description": "true if the carrier says the tracking number is not found / invalid."
+      },
+      {
+        "variableName": "status",
+        "dataType": "string",
+        "description": "The carrier status text, e.g. delivered, out for delivery, in transit, exception, returned, lost."
+      },
+      {
+        "variableName": "is_delayed",
+        "dataType": "boolean",
+        "description": "true if the parcel is in transit and its estimated delivery is more than the 7-day threshold away."
+      }
+    ],
+    "steps": {
+      "start": {
+        "type": "start",
+        "next": "decide_parcels"
+      },
+      "decide_parcels": {
+        "type": "listDecision",
+        "settings": {
+          "action": "Per tracking number: query carrier API for live status; classify outcome."
+        },
+        "itemSource": {
+          "file": "examples/shipment_tracking/tracking-ids.txt",
+          "path": ""
+        },
+        "itemFacts": {
+          "kind": "exec",
+          "command": [
+            "python3",
+            "examples/shipment_tracking/bin/track.py",
+            "--host",
+            "http://localhost:4000/v1",
+            "--threshold",
+            "7",
+            "{value}"
+          ],
+          "parse": "json",
+          "derive": {
+            "tracking_number": {
+              "from_output": "tracking_number",
+              "default": ""
+            },
+            "lookup_failed": {
+              "from_output": "lookup_failed",
+              "default": false
+            },
+            "not_found": {
+              "from_output": "not_found",
+              "default": false
+            },
+            "status": {
+              "from_output": "status",
+              "default": ""
+            },
+            "last_location": {
+              "from_output": "last_location",
+              "default": ""
+            },
+            "estimated_delivery": {
+              "from_output": "estimated_delivery",
+              "default": ""
+            },
+            "is_delayed": {
+              "from_output": "is_delayed",
+              "default": false
+            },
+            "needs_attention": {
+              "from_output": "needs_attention",
+              "default": false
+            },
+            "note": {
+              "from_output": "note",
+              "default": ""
+            }
+          }
+        },
+        "itemVariables": [
+          {
+            "variableName": "tracking_number",
+            "description": "The carrier tracking number for this parcel.",
+            "dataType": "string"
+          },
+          {
+            "variableName": "lookup_failed",
+            "description": "true if the carrier lookup failed, timed out, or returned a non-200 / empty response.",
+            "dataType": "boolean"
+          },
+          {
+            "variableName": "not_found",
+            "description": "true if the carrier says the tracking number is not found / invalid.",
+            "dataType": "boolean"
+          },
+          {
+            "variableName": "status",
+            "description": "The carrier status text, e.g. delivered, out for delivery, in transit, exception, returned, lost.",
+            "dataType": "string"
+          },
+          {
+            "variableName": "last_location",
+            "description": "The parcel's last known location reported by the carrier.",
+            "dataType": "string"
+          },
+          {
+            "variableName": "estimated_delivery",
+            "description": "The carrier's estimated delivery date (ISO YYYY-MM-DD), if any.",
+            "dataType": "string"
+          },
+          {
+            "variableName": "is_delayed",
+            "description": "true if the parcel is in transit and its estimated delivery is more than the 7-day threshold away.",
+            "dataType": "boolean"
+          },
+          {
+            "variableName": "needs_attention",
+            "description": "true when the outcome needs human attention (delayed or escalate).",
+            "dataType": "boolean"
+          },
+          {
+            "variableName": "note",
+            "description": "A short human-readable note describing the parcel's status.",
+            "dataType": "string"
+          }
+        ],
+        "decisionKey": "outcome",
+        "collectInto": "tracking_results",
+        "emit": [
+          "tracking_number",
+          "outcome",
+          "status",
+          "last_location",
+          "estimated_delivery",
+          "note",
+          "needs_attention"
+        ],
+        "conditions": [
+          {
+            "condition": "lookup_failed is true",
+            "next": "error",
+            "expCondition": "lookup_failed is true"
+          },
+          {
+            "condition": "not_found is true",
+            "next": "not_found",
+            "expCondition": "not_found is true"
+          },
+          {
+            "condition": "status is delivered",
+            "next": "delivered",
+            "expCondition": "status is 'delivered'"
+          },
+          {
+            "condition": "status is out for delivery",
+            "next": "out_for_delivery",
+            "expCondition": "status is 'out for delivery'"
+          },
+          {
+            "condition": "is_delayed is true",
+            "next": "delayed",
+            "expCondition": "is_delayed is true"
+          },
+          {
+            "condition": "status is in transit",
+            "next": "in_transit",
+            "expCondition": "status is 'in transit'"
+          },
+          {
+            "condition": "status is exception",
+            "next": "escalate",
+            "expCondition": "status is 'exception'"
+          },
+          {
+            "condition": "status is returned",
+            "next": "escalate",
+            "expCondition": "status is 'returned'"
+          },
+          {
+            "condition": "status is lost",
+            "next": "escalate",
+            "expCondition": "status is 'lost'"
+          }
+        ],
+        "defaultNext": "in_transit",
+        "next": "save_results",
+        "choices": [
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "lookup_failed",
+                "operator": "is",
+                "value": true
+              }
+            ],
+            "next": "error"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "not_found",
+                "operator": "is",
+                "value": true
+              }
+            ],
+            "next": "not_found"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "status",
+                "operator": "is",
+                "value": "delivered"
+              }
+            ],
+            "next": "delivered"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "status",
+                "operator": "is",
+                "value": "out for delivery"
+              }
+            ],
+            "next": "out_for_delivery"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "is_delayed",
+                "operator": "is",
+                "value": true
+              }
+            ],
+            "next": "delayed"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "status",
+                "operator": "is",
+                "value": "in transit"
+              }
+            ],
+            "next": "in_transit"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "status",
+                "operator": "is",
+                "value": "exception"
+              }
+            ],
+            "next": "escalate"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "status",
+                "operator": "is",
+                "value": "returned"
+              }
+            ],
+            "next": "escalate"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "status",
+                "operator": "is",
+                "value": "lost"
+              }
+            ],
+            "next": "escalate"
+          }
+        ],
+        "nullOn": {}
+      },
+      "save_results": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Read records from `tracking_results` slot. Build object: `summary` { `total` = record count, `counts` = map of count per `outcome` value }, then `results` = full record list (each: tracking_number, outcome, status, last_location, estimated_delivery, note, needs_attention where set). Write as pretty JSON to `tracking-status-<today>.json` in cwd, <today>=YYYY-MM-DD (e.g. tracking-status-2026-06-22.json). Unattended batch; ask nothing."
+        }
+      }
+    },
+    "result": {
+      "kind": "template",
+      "value": {
+        "tracking_results": "{tracking_results}"
+      }
+    },
+    "segments": [
+      {
+        "id": "start",
+        "steps": [
+          "decide_parcels"
+        ],
+        "branchStep": "decide_parcels"
+      },
+      {
+        "id": "save_results",
+        "steps": [
+          "save_results"
+        ],
+        "branchStep": null
+      }
+    ]
+  }
+}

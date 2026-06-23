@@ -1,0 +1,16 @@
+{
+  "provider": "anthropic",
+  "model": "claude-opus-4-7",
+  "mode": "native",
+  "stream": true,
+  "max_tokens": 4096,
+  "max_steps": 10,
+  "show_tool_results": false,
+  "tools": {
+    "shell_exec": {
+      "timeout_seconds": 30,
+      "max_output_bytes": 10000,
+      "auto": false
+    }
+  }
+}

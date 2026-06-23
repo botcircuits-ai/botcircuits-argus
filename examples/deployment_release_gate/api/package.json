@@ -1,0 +1,10 @@
+{
+  "name": "deployment-release-gate-mock-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Mock DevOps deployment/health API for the deployment_release_gate workflow example.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

@@ -1,0 +1,257 @@
+{
+  "name": "lab_results_triage",
+  "description": "Unattended night-shift clinical lab-results triage. Reads a triage protocol and a list of lab order ids, runs pre-flight safety gates (protocol approval, CLIA lab accreditation, lab-information-system status), then for each lab order deterministically pulls the resulted panel + patient context from the clinical lab / EHR API and classifies a triage outcome (routine / review / interaction / critical / pending / no_episode / not_found / error). Tallies the batch, pages on any criticals, escalates criticals to the on-call provider, queues abnormal/interaction orders for provider review, and writes a dated triage report. Any pre-flight or tally gate failure aborts the whole batch and writes an abort report. Never asks the user anything.",
+  "flow": {
+    "start": "start",
+    "variables": [
+      {
+        "variableName": "protocol_config_file",
+        "description": "Path to the triage protocol JSON (protocol_id, facility, clia_certificate, clia_valid, approved, ordering_provider_oncall, abnormal_flag_threshold, min_results_required). Default: examples/lab_results_triage/config/protocol.json.",
+        "dataType": "string"
+      },
+      {
+        "variableName": "orders_file",
+        "description": "Path to the plain-text file holding one lab order id per line to triage. Default: examples/lab_results_triage/lab-orders.txt. To process a different batch, point the decide_orders step's itemSource.file at another file.",
+        "dataType": "string"
+      },
+      {
+        "variableName": "protocol_id",
+        "description": "The triage protocol identifier read from the protocol config.",
+        "dataType": "string"
+      },
+      {
+        "variableName": "facility",
+        "description": "The lab facility name read from the protocol config.",
+        "dataType": "string"
+      },
+      {
+        "variableName": "clia_certificate",
+        "description": "The CLIA certificate number read from the protocol config.",
+        "dataType": "string"
+      },
+      {
+        "variableName": "on_call_provider",
+        "description": "The on-call ordering provider to page for critical (panic) values, read from the protocol config.",
+        "dataType": "string"
+      },
+      {
+        "variableName": "protocol_approved",
+        "description": "Whether the triage protocol is approved for use.",
+        "dataType": "boolean"
+      },
+      {
+        "variableName": "clia_valid",
+        "description": "Whether the lab's CLIA accreditation certificate is valid (false or a blank certificate means results may not be released).",
+        "dataType": "boolean"
+      },
+      {
+        "variableName": "lis_offline",
+        "description": "Whether the lab information system (LIS) is currently offline; results cannot be trusted mid-outage.",
+        "dataType": "boolean"
+      },
+      {
+        "variableName": "abnormal_flag_threshold",
+        "description": "Minimum number of abnormal flags at/above which an order is queued for provider review.",
+        "dataType": "number"
+      },
+      {
+        "variableName": "min_results_required",
+        "description": "Minimum number of resulted (non-pending/error/not_found) orders required for the batch to proceed.",
+        "dataType": "number"
+      },
+      {
+        "variableName": "triage_results",
+        "description": "The list of per-order decided records collected by the decide_orders listDecision step.",
+        "dataType": "list"
+      },
+      {
+        "variableName": "resulted_count",
+        "description": "How many orders resulted (every outcome except pending, error, and not_found).",
+        "dataType": "number"
+      },
+      {
+        "variableName": "critical_count",
+        "description": "How many orders received a critical outcome (a panic value is present).",
+        "dataType": "number"
+      },
+      {
+        "variableName": "review_queue_count",
+        "description": "How many orders need provider review (review + interaction outcomes).",
+        "dataType": "number"
+      },
+      {
+        "variableName": "attention_count",
+        "description": "How many orders need human attention (critical + interaction + review outcomes).",
+        "dataType": "number"
+      }
+    ],
+    "steps": {
+      "start": {
+        "type": "start",
+        "next": "load_protocol"
+      },
+
+      "load_protocol": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Read the triage protocol JSON at `examples/lab_results_triage/config/protocol.json`. Extract protocol_id, facility, clia_certificate, the `clia_valid` flag, the `approved` flag, ordering_provider_oncall, abnormal_flag_threshold, and min_results_required. Set protocol_id, facility, clia_certificate, and on_call_provider (from ordering_provider_oncall) accordingly; set protocol_approved from `approved`; set clia_valid from `clia_valid`; set abnormal_flag_threshold and min_results_required from the protocol. Do not ask any questions; this is an unattended batch run."
+        },
+        "next": "verify_accreditation",
+        "conditions": [
+          { "condition": "protocol_approved is false", "next": "abort_batch" }
+        ]
+      },
+
+      "verify_accreditation": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Verify the lab's accreditation before any results are released: the CLIA certificate must be valid. This is a safety/compliance pre-flight gate, not a result release."
+        },
+        "next": "check_lis_status",
+        "conditions": [
+          { "condition": "clia_valid is false", "next": "abort_batch" },
+          { "condition": "clia_certificate is blank", "next": "abort_batch" }
+        ]
+      },
+
+      "check_lis_status": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Query the clinical lab / EHR API lab-information-system endpoint `http://localhost:4200/v1/lis-status` and read its JSON. Set lis_offline to true when the LIS is offline / not online (e.g. its status is not `online` or an `online` flag is false). A LIS outage means results cannot be trusted, so the whole batch must abort."
+        },
+        "next": "decide_orders",
+        "conditions": [
+          { "condition": "lis_offline is true", "next": "abort_batch" }
+        ]
+      },
+
+      "decide_orders": {
+        "type": "listDecision",
+        "settings": {
+          "action": "For each lab order id, pull the resulted panel plus patient context from the clinical lab / EHR API and classify a triage outcome."
+        },
+        "itemSource": {
+          "file": "examples/lab_results_triage/lab-orders.txt",
+          "path": ""
+        },
+        "itemFacts": {
+          "kind": "exec",
+          "command": [
+            "python3",
+            "examples/lab_results_triage/bin/triage_check.py",
+            "--host",
+            "http://localhost:4200/v1",
+            "--abnormal-threshold",
+            "1",
+            "{value}"
+          ],
+          "parse": "json",
+          "derive": {
+            "order": { "from_output": "order", "default": "" },
+            "lookup_failed": { "from_output": "lookup_failed", "default": false },
+            "not_found": { "from_output": "not_found", "default": false },
+            "not_resulted": { "from_output": "not_resulted", "default": false },
+            "critical_value": { "from_output": "critical_value", "default": false },
+            "drug_interaction": { "from_output": "drug_interaction", "default": false },
+            "no_episode": { "from_output": "no_episode", "default": false },
+            "abnormal": { "from_output": "abnormal", "default": false },
+            "interaction_review": { "from_output": "interaction_review", "default": false },
+            "abnormal_flags": { "from_output": "abnormal_flags", "default": 0 },
+            "worst_flag": { "from_output": "worst_flag", "default": "" },
+            "panel": { "from_output": "panel", "default": "" },
+            "needs_attention": { "from_output": "needs_attention", "default": false },
+            "note": { "from_output": "note", "default": "" }
+          }
+        },
+        "itemVariables": [
+          { "variableName": "order", "description": "The lab order id being triaged.", "dataType": "string" },
+          { "variableName": "lookup_failed", "description": "true if the lab/EHR lookup failed, timed out, or returned a non-200 / unreadable response.", "dataType": "boolean" },
+          { "variableName": "not_found", "description": "true if the order is not on file in the lab system (HTTP 404).", "dataType": "boolean" },
+          { "variableName": "not_resulted", "description": "true if the panel was ordered but has not yet resulted.", "dataType": "boolean" },
+          { "variableName": "critical_value", "description": "true if a critical (panic) value is present on the panel.", "dataType": "boolean" },
+          { "variableName": "drug_interaction", "description": "true if a drug/allergy interaction applies to the ordered follow-up.", "dataType": "boolean" },
+          { "variableName": "no_episode", "description": "true if the patient no longer has an active care episode.", "dataType": "boolean" },
+          { "variableName": "abnormal", "description": "true if the panel's abnormal-flag count is at or above the abnormal_flag_threshold.", "dataType": "boolean" },
+          { "variableName": "interaction_review", "description": "true if the panel is abnormal (flags at/above threshold) AND a drug/allergy interaction applies to the ordered follow-up (pharmacy + provider review).", "dataType": "boolean" },
+          { "variableName": "abnormal_flags", "description": "Number of abnormal flags on the panel.", "dataType": "number" },
+          { "variableName": "worst_flag", "description": "The worst (most severe) abnormal flag on the panel.", "dataType": "string" },
+          { "variableName": "panel", "description": "The lab panel name.", "dataType": "string" },
+          { "variableName": "needs_attention", "description": "true when the outcome needs human attention (critical / interaction / review).", "dataType": "boolean" },
+          { "variableName": "note", "description": "A short human-readable note describing the triage decision.", "dataType": "string" }
+        ],
+        "decisionKey": "outcome",
+        "collectInto": "triage_results",
+        "emit": [
+          "order",
+          "outcome",
+          "panel",
+          "worst_flag",
+          "abnormal_flags",
+          "note",
+          "needs_attention"
+        ],
+        "conditions": [
+          { "condition": "lookup_failed is true", "next": "error" },
+          { "condition": "not_found is true", "next": "not_found" },
+          { "condition": "not_resulted is true", "next": "pending" },
+          { "condition": "critical_value is true", "next": "critical" },
+          { "condition": "no_episode is true", "next": "no_episode" },
+          { "condition": "interaction_review is true", "next": "interaction" },
+          { "condition": "abnormal is true", "next": "review" }
+        ],
+        "defaultNext": "routine",
+        "next": "tally_results"
+      },
+
+      "tally_results": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Read the decided records in the `triage_results` slot. Set resulted_count to the number of records whose outcome is anything except `pending`, `error`, or `not_found`. Set critical_count to the number whose outcome is `critical`. Set review_queue_count to the number whose outcome is `review` or `interaction`. Set attention_count to the number whose outcome is `critical`, `interaction`, or `review`. Do not change any records; only compute these counts."
+        },
+        "next": "queue_reviews",
+        "conditions": [
+          { "condition": "resulted_count is less than min_results_required", "next": "abort_batch" },
+          { "condition": "critical_count is greater than 0", "next": "page_criticals" }
+        ]
+      },
+
+      "page_criticals": {
+        "type": "agentAction",
+        "settings": {
+          "action": "One or more orders have a critical (panic) value. Send a critical-value page to the on-call ordering provider (on_call_provider) summarizing every order whose outcome is `critical` together with its panel and worst_flag. This is the immediate page that must go out before any further action."
+        },
+        "next": "escalate_criticals"
+      },
+
+      "escalate_criticals": {
+        "type": "agentAction",
+        "settings": {
+          "action": "For every order whose outcome is `critical`, open a critical-value escalation to the on-call ordering provider (on_call_provider): record the order, panel, and worst_flag and that the provider was escalated for follow-up. Leave all other orders untouched."
+        },
+        "next": "queue_reviews"
+      },
+
+      "queue_reviews": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Queue a provider-review task for every order whose outcome is `review` or `interaction`. For `interaction` orders, route to pharmacy plus the provider (a drug/allergy interaction applies to the follow-up); for `review` orders, queue for provider review only. Record which orders were queued together with their panel, worst_flag, and note. Leave routine, pending, no_episode, critical, error, and not_found orders untouched."
+        },
+        "next": "write_report"
+      },
+
+      "write_report": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Build a triage report object with a `summary` block at the top — protocol_id and facility from the protocol, `total` (number of triage records), `resulted` (resulted_count), `criticals` (critical_count), `review_queue` (review_queue_count), `attention` (attention_count), and a `counts` map of how many records fall under each `outcome` value — followed by `results` (the full list of decided records from `triage_results`, each with order, outcome, panel, worst_flag, abnormal_flags, note, and needs_attention where set). Write this object as pretty JSON to a file named `triage-report-<today>.json` in the current working directory, where <today> is today's date in YYYY-MM-DD format (e.g. triage-report-2026-06-22.json). Do not ask any questions; this is an unattended batch run."
+        }
+      },
+
+      "abort_batch": {
+        "type": "agentAction",
+        "settings": {
+          "action": "The triage batch was aborted at a pre-flight or tally gate (protocol not approved, invalid/blank CLIA accreditation, the lab information system offline, or too few orders resulted). Write an abort report as pretty JSON to a file named `triage-abort-<today>.json` in the current working directory (<today> = today's date in YYYY-MM-DD), capturing the reason the batch was aborted, the protocol_id and facility if available, and any triage_results collected so far. Do not ask any questions; this is an unattended batch run."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "protocol_id": "LAB-TRIAGE-2026.06",
+  "facility": "Springfield General Hospital — Clinical Labs",
+  "clia_certificate": "11D2099999",
+  "clia_valid": true,
+  "approved": true,
+  "ordering_provider_oncall": "Dr. A. Patel (pager 5512)",
+  "critical_value_escalation": "Page ordering provider within 15 minutes for any critical (panic) result.",
+  "abnormal_flag_threshold": 1,
+  "min_results_required": 4,
+  "notes": "Routine night-shift lab triage batch. Page on criticals, queue abnormals for provider review, defer pending panels, hold orders without an active care episode."
+}

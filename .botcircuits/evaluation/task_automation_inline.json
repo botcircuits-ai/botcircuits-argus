@@ -1,0 +1,801 @@
+{
+  "name": "task_automation_v1",
+  "description": "Evaluates two task-automation workflows optimised for CRON / WebHook triggers: (1) a competitive-research pipeline that gathers data, scores competitors, and routes to different report formats based on findings, and (2) a document-processing pipeline that ingests files, classifies them, extracts fields, validates, and routes to approval or rejection. Both workflows exercise 50+ agentAction states with deep conditional branching.",
+  "workflow": "competitive_research",
+  "workflow_spec": "Build a workflow named `competitive_research` that runs a full competitive-research and document-processing pipeline end-to-end. This is designed to be triggered by a CRON job or WebHook with initial-args. The workflow MUST contain at least the following steps as separate agentAction states. Every branch lives as `conditions` inside the owning agentAction — no separate `choice` states.\n\nPHASE 1 — RESEARCH INTAKE (steps 1–8):\n1. receive_trigger — acknowledge the trigger source and log the run timestamp. Variable: trigger_source (string, one of: cron, webhook, manual).\n2. check_trigger_type — if trigger_source is 'manual', branch to `request_research_topic`; otherwise continue to load_config.\n3. load_config — load the research configuration (target industry, competitor list, date range). Variables: industry (string), competitor_count (number), date_range_days (number).\n4. validate_config — if competitor_count is less than 1, branch to `abort_invalid_config`; if competitor_count is greater than 20, branch to `abort_too_many_competitors`; otherwise continue.\n5. request_research_topic — ask the user for the research topic and industry (only reached from manual trigger). Variable: research_topic (string).\n6. set_research_scope — determine whether the research scope is narrow (competitor_count <= 3), medium (4–10), or broad (> 10). Variable: research_scope (string).\n7. check_scope_resources — if research_scope is 'broad' and date_range_days is greater than 90, branch to `warn_large_scope`; otherwise continue.\n8. confirm_parameters — summarise all parameters and confirm the run should proceed. Variable: parameters_confirmed (boolean).\n\nPHASE 2 — DATA GATHERING (steps 9–16):\n9. check_parameters_confirmed — if parameters_confirmed is false, branch to `abort_user_cancelled`; otherwise continue.\n10. gather_web_data — search the web for recent news, press releases, and blog posts about each competitor. Variable: web_results_count (number).\n11. check_web_results — if web_results_count is 0, branch to `no_web_data_fallback`; otherwise continue.\n12. gather_financial_data — pull publicly available financial data (revenue estimates, funding rounds, headcount). Variable: financial_data_available (boolean).\n13. check_financial_data — if financial_data_available is false, branch to `skip_financial_analysis`; otherwise continue.\n14. gather_social_signals — collect social-media mention counts, sentiment scores, and trending topics. Variable: social_sentiment (string, one of: positive, neutral, negative, mixed).\n15. gather_product_updates — check for product launches, feature announcements, and pricing changes. Variable: product_updates_count (number).\n16. aggregate_raw_data — combine all gathered data into a single raw dataset. Variable: total_data_points (number).\n\nPHASE 3 — ANALYSIS & SCORING (steps 17–28):\n17. check_data_sufficiency — if total_data_points is less than 10, branch to `insufficient_data_report`; otherwise continue.\n18. score_market_position — assign each competitor a market-position score 1–100. Variable: avg_market_score (number).\n19. score_innovation — assign each competitor an innovation score based on product updates and patents. Variable: avg_innovation_score (number).\n20. score_financial_health — assign each competitor a financial-health score. Variable: avg_financial_score (number).\n21. compute_threat_level — compute a composite threat index from the three scores. Variable: threat_level (string, one of: low, medium, high, critical).\n22. check_threat_level — if threat_level is 'critical', branch to `escalate_critical_threat`; if threat_level is 'high', branch to `flag_high_threat`; otherwise continue.\n23. analyse_sentiment_trends — identify whether sentiment is trending up, down, or stable. Variable: sentiment_trend (string, one of: improving, declining, stable).\n24. check_sentiment_decline — if sentiment_trend is 'declining' and social_sentiment is 'negative', branch to `flag_negative_sentiment`; otherwise continue.\n25. identify_opportunities — list market gaps or weaknesses in competitors. Variable: opportunities_found (number).\n26. identify_risks — list competitive risks or threats. Variable: risks_found (number).\n27. check_risk_ratio — if risks_found is greater than opportunities_found, branch to `generate_defensive_report`; otherwise continue.\n28. generate_swot_summary — produce a SWOT (Strengths, Weaknesses, Opportunities, Threats) summary.\n\nPHASE 4 — DOCUMENT PROCESSING (steps 29–40):\n29. receive_documents — receive uploaded documents for processing. Variable: document_count (number).\n30. check_document_count — if document_count is 0, branch to `no_documents_provided`; if document_count is greater than 50, branch to `too_many_documents`; otherwise continue.\n31. classify_documents — classify each document by type (report, invoice, contract, correspondence, other). Variable: primary_doc_type (string).\n32. check_doc_type — if primary_doc_type is 'contract', branch to `extract_contract_fields`; if primary_doc_type is 'invoice', branch to `extract_invoice_fields`; otherwise continue to extract_general_fields.\n33. extract_general_fields — extract title, date, author, and key entities from general documents. Variable: extraction_confidence (number, 0–100).\n34. extract_contract_fields — extract parties, effective date, expiration date, value, and key clauses. Variable: extraction_confidence (number, 0–100).\n35. extract_invoice_fields — extract vendor, amount, due date, line items, and PO number. Variable: extraction_confidence (number, 0–100).\n36. validate_extraction — if extraction_confidence is less than 60, branch to `flag_low_confidence`; if extraction_confidence is greater than or equal to 60 and less than 85, branch to `request_human_review`; otherwise continue.\n37. check_duplicates — check if any extracted document is a duplicate of an existing record. Variable: has_duplicates (boolean).\n38. check_duplicate_action — if has_duplicates is true, branch to `handle_duplicates`; otherwise continue.\n39. enrich_metadata — add tags, categories, and cross-references to extracted data. Variable: enrichment_complete (boolean).\n40. check_enrichment — if enrichment_complete is false, branch to `enrichment_failed`; otherwise continue.\n\nPHASE 5 — REPORT GENERATION & DELIVERY (steps 41–50):\n41. select_report_format — determine output format based on trigger. Variable: report_format (string, one of: pdf, markdown, json, email).\n42. check_report_format — if report_format is 'email', branch to `compose_email_report`; if report_format is 'json', branch to `generate_json_output`; otherwise continue to generate_document_report.\n43. generate_document_report — produce a formatted PDF or Markdown report with executive summary, competitor profiles, SWOT, and recommendations.\n44. compose_email_report — compose a concise email summary with key findings and attach the full report.\n45. generate_json_output — produce a structured JSON payload for downstream API consumption.\n46. attach_processed_documents — attach all processed document extractions to the report.\n47. determine_distribution — decide the distribution list based on threat level. Variable: distribution_scope (string, one of: team, leadership, board).\n48. check_distribution_scope — if distribution_scope is 'board', branch to `add_executive_summary`; otherwise continue.\n49. add_executive_summary — prepend a one-page executive summary for board-level distribution.\n50. deliver_report — send the report to all recipients and log the delivery.\n\nTERMINAL & ERROR STATES (steps 51–62):\n51. abort_invalid_config — report that the configuration is invalid (competitor_count < 1) and terminate.\n52. abort_too_many_competitors — report that too many competitors were specified (> 20) and terminate.\n53. abort_user_cancelled — report that the run was cancelled by the user.\n54. warn_large_scope — warn that the scope is very large and may take extended time, then continue to confirm_parameters.\n55. no_web_data_fallback — report that no web data was found and fall back to financial and social data only, then continue to gather_financial_data.\n56. skip_financial_analysis — skip financial scoring and continue to gather_social_signals.\n57. insufficient_data_report — generate a minimal report noting insufficient data and terminate.\n58. escalate_critical_threat — escalate immediately to leadership with an urgent alert and terminate.\n59. flag_high_threat — flag the report as high-priority and continue to analyse_sentiment_trends.\n60. flag_negative_sentiment — add a sentiment-decline warning section to the report and continue to identify_opportunities.\n61. generate_defensive_report — generate a defensive-strategy report instead of the standard one and proceed to deliver_report.\n62. no_documents_provided — report that no documents were provided for processing and skip to select_report_format.\n63. too_many_documents — report that document batch exceeds the 50-document limit and terminate.\n64. flag_low_confidence — flag documents with low extraction confidence for manual processing and terminate.\n65. request_human_review — queue documents for human review and continue to check_duplicates.\n66. handle_duplicates — merge or skip duplicate documents and continue to enrich_metadata.\n67. enrichment_failed — report enrichment failure and continue to select_report_format with partial data.\n68. add_executive_summary_done — (convergence after executive summary) continue to deliver_report.\n\nNotes: there is no separate `choice` state type. Every branch must live as `conditions` inside the `agentAction` it belongs to. The start step should be a `start` state pointing at `receive_trigger`. Every branching state MUST have a `next` field pointing at the fall-through state. Variables must include each variable named above with its declared dataType.",
+  "cases": [
+    {
+      "id": "research.happy_path_cron_trigger",
+      "description": "CRON-triggered research run with 5 competitors, good data, medium threat, standard PDF report delivered to team. Full happy path through all phases.",
+      "initial_args": {
+        "trigger_source": "cron",
+        "industry": "fintech",
+        "competitor_count": 5,
+        "date_range_days": 30
+      },
+      "initial_user_text": "Run the scheduled competitive research analysis.",
+      "turns": [
+        {
+          "args": {},
+          "user_text": "Yes, parameters look good. Proceed."
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": "There are 3 documents to process."
+        },
+        {
+          "args": {},
+          "user_text": "They are general reports."
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": "PDF format please."
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        }
+      ],
+      "expected": {
+        "must_contain": [
+          "delivered",
+          "report"
+        ]
+      }
+    },
+    {
+      "id": "research.abort_invalid_config",
+      "description": "WebHook trigger with competitor_count=0. Should branch at validate_config to abort_invalid_config.",
+      "initial_args": {
+        "trigger_source": "webhook",
+        "industry": "healthcare",
+        "competitor_count": 0,
+        "date_range_days": 30
+      },
+      "initial_user_text": "Incoming webhook trigger for competitive research.",
+      "turns": [
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        }
+      ],
+      "expected": {
+        "must_contain": [
+          "invalid",
+          "competitor"
+        ]
+      }
+    },
+    {
+      "id": "research.abort_too_many_competitors",
+      "description": "CRON trigger with 25 competitors. Should branch at validate_config to abort_too_many_competitors.",
+      "initial_args": {
+        "trigger_source": "cron",
+        "industry": "saas",
+        "competitor_count": 25,
+        "date_range_days": 60
+      },
+      "initial_user_text": "Run the scheduled competitive research.",
+      "turns": [
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        }
+      ],
+      "expected": {
+        "must_contain": [
+          "too many",
+          "20"
+        ]
+      }
+    },
+    {
+      "id": "research.critical_threat_escalation",
+      "description": "Research discovers critical threat level. Should escalate immediately at check_threat_level to escalate_critical_threat.",
+      "initial_args": {
+        "trigger_source": "webhook",
+        "industry": "ecommerce",
+        "competitor_count": 3,
+        "date_range_days": 14
+      },
+      "initial_user_text": "Webhook trigger: urgent competitive scan requested.",
+      "turns": [
+        {
+          "args": {},
+          "user_text": "Yes, confirmed."
+        },
+        {
+          "args": {},
+          "user_text": "Found 45 web results."
+        },
+        {
+          "args": {},
+          "user_text": "Yes, financial data is available."
+        },
+        {
+          "args": {},
+          "user_text": "Sentiment is negative."
+        },
+        {
+          "args": {},
+          "user_text": "Found 12 product updates."
+        },
+        {
+          "args": {},
+          "user_text": "Total 87 data points."
+        },
+        {
+          "args": {},
+          "user_text": "Average market score is 85."
+        },
+        {
+          "args": {},
+          "user_text": "Average innovation score is 90."
+        },
+        {
+          "args": {},
+          "user_text": "Average financial score is 88."
+        },
+        {
+          "args": {},
+          "user_text": "The threat level is critical."
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        }
+      ],
+      "expected": {
+        "must_contain": [
+          "critical",
+          "escalat"
+        ]
+      }
+    },
+    {
+      "id": "research.manual_trigger_user_cancel",
+      "description": "Manual trigger where user cancels at confirm_parameters. Should route to abort_user_cancelled.",
+      "initial_args": {
+        "trigger_source": "manual"
+      },
+      "initial_user_text": "I want to run a competitive research analysis manually.",
+      "turns": [
+        {
+          "args": {},
+          "user_text": "I want to research the AI infrastructure space."
+        },
+        {
+          "args": {},
+          "user_text": "Look at 5 competitors over the last 60 days."
+        },
+        {
+          "args": {},
+          "user_text": "Actually no, cancel the run. I need to rethink the scope."
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        }
+      ],
+      "expected": {
+        "must_contain": [
+          "cancelled"
+        ]
+      }
+    },
+    {
+      "id": "research.insufficient_data",
+      "description": "Research gathering finds very few data points (< 10). Should branch at check_data_sufficiency to insufficient_data_report.",
+      "initial_args": {
+        "trigger_source": "cron",
+        "industry": "quantum_computing",
+        "competitor_count": 2,
+        "date_range_days": 7
+      },
+      "initial_user_text": "Run the scheduled competitive research for quantum computing.",
+      "turns": [
+        {
+          "args": {},
+          "user_text": "Yes, proceed."
+        },
+        {
+          "args": {},
+          "user_text": "Only found 2 web results."
+        },
+        {
+          "args": {},
+          "user_text": "No financial data available."
+        },
+        {
+          "args": {},
+          "user_text": "Sentiment is neutral."
+        },
+        {
+          "args": {},
+          "user_text": "Zero product updates found."
+        },
+        {
+          "args": {},
+          "user_text": "Total is only 5 data points."
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        }
+      ],
+      "expected": {
+        "must_contain": [
+          "insufficient",
+          "data"
+        ]
+      }
+    },
+    {
+      "id": "research.contract_processing_low_confidence",
+      "description": "Document processing receives contracts with low extraction confidence (< 60). Should branch at validate_extraction to flag_low_confidence.",
+      "initial_args": {
+        "trigger_source": "webhook",
+        "industry": "legal",
+        "competitor_count": 4,
+        "date_range_days": 30
+      },
+      "initial_user_text": "Webhook trigger: process incoming contracts and run competitive analysis.",
+      "turns": [
+        {
+          "args": {},
+          "user_text": "Yes, confirmed."
+        },
+        {
+          "args": {},
+          "user_text": "Found 30 web results."
+        },
+        {
+          "args": {},
+          "user_text": "Yes, financial data is available."
+        },
+        {
+          "args": {},
+          "user_text": "Sentiment is positive."
+        },
+        {
+          "args": {},
+          "user_text": "Found 8 product updates."
+        },
+        {
+          "args": {},
+          "user_text": "Total 60 data points."
+        },
+        {
+          "args": {},
+          "user_text": "Average market score 65."
+        },
+        {
+          "args": {},
+          "user_text": "Average innovation score 55."
+        },
+        {
+          "args": {},
+          "user_text": "Average financial score 70."
+        },
+        {
+          "args": {},
+          "user_text": "Threat level is medium."
+        },
+        {
+          "args": {},
+          "user_text": "Sentiment is stable."
+        },
+        {
+          "args": {},
+          "user_text": "Found 4 opportunities."
+        },
+        {
+          "args": {},
+          "user_text": "Found 2 risks."
+        },
+        {
+          "args": {},
+          "user_text": "SWOT generated."
+        },
+        {
+          "args": {},
+          "user_text": "There are 5 documents to process."
+        },
+        {
+          "args": {},
+          "user_text": "They are contracts."
+        },
+        {
+          "args": {},
+          "user_text": "Extraction confidence is only 45 percent."
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        }
+      ],
+      "expected": {
+        "must_contain": [
+          "low confidence",
+          "manual"
+        ]
+      }
+    },
+    {
+      "id": "research.defensive_report_board_distribution",
+      "description": "Research finds more risks than opportunities, triggering a defensive report. Distribution scope is board-level, so executive summary is added. Tests the generate_defensive_report and add_executive_summary branches.",
+      "initial_args": {
+        "trigger_source": "cron",
+        "industry": "cybersecurity",
+        "competitor_count": 6,
+        "date_range_days": 45
+      },
+      "initial_user_text": "Run the scheduled competitive research for cybersecurity sector.",
+      "turns": [
+        {
+          "args": {},
+          "user_text": "Yes, confirmed. Proceed."
+        },
+        {
+          "args": {},
+          "user_text": "Found 50 web results."
+        },
+        {
+          "args": {},
+          "user_text": "Yes, financial data is available."
+        },
+        {
+          "args": {},
+          "user_text": "Sentiment is mixed."
+        },
+        {
+          "args": {},
+          "user_text": "Found 15 product updates."
+        },
+        {
+          "args": {},
+          "user_text": "Total 95 data points."
+        },
+        {
+          "args": {},
+          "user_text": "Average market score 72."
+        },
+        {
+          "args": {},
+          "user_text": "Average innovation score 78."
+        },
+        {
+          "args": {},
+          "user_text": "Average financial score 74."
+        },
+        {
+          "args": {},
+          "user_text": "Threat level is medium."
+        },
+        {
+          "args": {},
+          "user_text": "Sentiment trend is declining."
+        },
+        {
+          "args": {},
+          "user_text": "Found 3 opportunities."
+        },
+        {
+          "args": {},
+          "user_text": "Found 7 risks."
+        },
+        {
+          "args": {},
+          "user_text": "There are 2 documents to process."
+        },
+        {
+          "args": {},
+          "user_text": "They are general reports."
+        },
+        {
+          "args": {},
+          "user_text": "Extraction confidence is 92 percent."
+        },
+        {
+          "args": {},
+          "user_text": "No duplicates found."
+        },
+        {
+          "args": {},
+          "user_text": "Enrichment is complete."
+        },
+        {
+          "args": {},
+          "user_text": "Markdown format."
+        },
+        {
+          "args": {},
+          "user_text": "Distribution scope is board."
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        },
+        {
+          "args": {},
+          "user_text": ""
+        }
+      ],
+      "expected": {
+        "must_contain": [
+          "defensive",
+          "board",
+          "executive summary"
+        ]
+      }
+    }
+  ]
+}

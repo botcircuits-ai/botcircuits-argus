@@ -1,0 +1,11 @@
+{
+  "release_id": "2026.06-R3",
+  "target_environment": "production",
+  "change_ticket": "CHG-48217",
+  "approved": true,
+  "rollback_plan": "Re-point the load balancer to the previous task-set; deploys are blue/green.",
+  "error_budget_pct": 1.0,
+  "latency_budget_ms": 500,
+  "min_services_required": 5,
+  "notes": "Quarterly platform release. Promote only services whose gate is green; canary the first-time ones."
+}

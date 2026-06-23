@@ -1,0 +1,12 @@
+{
+  "stream": true,
+  "max_tokens": 4096,
+  "max_steps": 500,
+  "show_tool_results": false,
+  "tools": {
+    "shell_exec": {
+      "timeout_seconds": 30,
+      "max_output_bytes": 10000
+    }
+  }
+}

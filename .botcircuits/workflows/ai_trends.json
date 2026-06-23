@@ -1,0 +1,43 @@
+{
+  "name": "ai_trends",
+  "description": "Check current trends in AI using Google Trends, summarize the findings, and write them to a dated results file find_<today>.txt. Unattended; never asks the user anything.",
+  "flow": {
+    "start": "start",
+    "variables": [
+      {
+        "variableName": "trends_findings",
+        "description": "The raw trending AI topics and rising search terms collected from Google Trends."
+      },
+      {
+        "variableName": "trends_report",
+        "description": "The concise human-readable summary of the AI trends, written to the dated results file."
+      }
+    ],
+    "steps": {
+      "start": {
+        "type": "start",
+        "next": "fetch_trends"
+      },
+      "fetch_trends": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Query Google Trends for trending topics and rising search interest related to artificial intelligence (AI). Collect the top trending AI-related queries, their relative interest, and any notable rising terms into the `trends_findings` slot."
+        },
+        "next": "analyze_trends"
+      },
+      "analyze_trends": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Using `trends_findings`, build a concise report into the `trends_report` slot: list the top trending AI topics, note which are rising vs. stable, and add a one-line takeaway about the overall direction of AI interest."
+        },
+        "next": "save_results"
+      },
+      "save_results": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Write the contents of `trends_report` to a text file named `find_<today>.txt` in the current working directory, where <today> is today's date in YYYY-MM-DD format (e.g. find_2026-06-22.txt). Do not ask any questions; this is an unattended run."
+        }
+      }
+    }
+  }
+}
