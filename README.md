@@ -1,6 +1,6 @@
 # Botcircuits Argus
 
-**Argus** helps your AI agent (Claude, Codex, OpenClaw, Hermes, etc.) run tasks predictably, traceably, and cost-efficiently. It achieves this through a combination of structured flow control and stateful memory context.
+**Argus** helps AI agent (Claude, Codex, OpenClaw, Hermes, etc.) to run your workflows **predictably**, **traceably**, and **cost-efficiently**. It achieves this through a combination of structured flow control and stateful memory context.
 
 ```
 claude > "create an order fulfillment workflow with stock check, ship, and backorder branches"
@@ -25,11 +25,8 @@ Argus ships **two skills** your agent loads:
 | Skill | The user says… | The agent does… |
 |---|---|---|
 | **botcircuits-workflow-authoring** | _"create an order fulfillment workflow with …"_ | Writes the workflow JSON and builds it. |
-| **botcircuits-workflow-running** | _"run order fulfillment"_ | Kicks off the run and relays results — it does **not** perform the steps itself. |
+| **botcircuits-workflow-running** | _"run order fulfillment"_ | runs workflow, the **deterministic engine** works in a background and dispatches each action to ai agent |
 
-```
-When a workflow runs, the deterministic engine walks the state machine in a background process and dispatches each action step to its own separate agent process.
-```
 ---
 
 ## Installation
