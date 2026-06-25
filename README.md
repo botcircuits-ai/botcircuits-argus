@@ -7,7 +7,7 @@ claude > "create an order fulfillment workflow with stock check, ship, and backo
 claude > "run order fulfillment"
 ```
 
-## A better model for execution
+## Structured flow control 
 Traditionally, AI agents are left to guess their next move, leading to unpredictable reasoning loops. Argus SKILL introduces a much more effective model: structured flow control.
 
 ## Stateful memory context
