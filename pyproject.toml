@@ -28,8 +28,6 @@ evals = [
 
 [project.scripts]
 botcircuits = "botcircuits.cli:main"
-botcircuits-gateway = "botcircuits.gateway.__main__:main"
-botcircuits-manager = "botcircuits.manager.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/botcircuits-ai/botcircuits-agent"

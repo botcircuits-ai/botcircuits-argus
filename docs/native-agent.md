@@ -105,7 +105,7 @@ FastAPI gateway (for HTTP + messaging channels):
 ```bash
 uv run uvicorn botcircuits.gateway:app --reload --port 8000
 # or
-botcircuits-gateway
+botcircuits gateway serve
 ```
 
 ### Useful CLI flags

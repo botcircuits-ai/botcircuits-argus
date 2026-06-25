@@ -286,6 +286,7 @@ async def _run(
     initial_args: dict,
     runtime_name: str | None,
     reply: str | None,
+    runtime_command: list[str] | None = None,
 ) -> dict:
     record = _load_workflow_record(name)
     flow = record.get("flow")
@@ -302,7 +303,14 @@ async def _run(
             "through the BotCircuits agent (botcircuits) instead, or pass "
             "--runtime claude-code."
         )
-    provider = select_runtime(settings=None, name=resolved_name)
+    # A caller may pin the exact spawn argv for the chosen CLI runtime (e.g.
+    # the eval pinning hermes' `--provider`/`-m`, which hermes takes only as
+    # flags — it ignores model env by design). Feed it through the runtime
+    # layer's existing `runtimes.<name>.command` override path.
+    settings = None
+    if runtime_command:
+        settings = {"runtimes": {resolved_name: {"command": runtime_command}}}
+    provider = select_runtime(settings=settings, name=resolved_name)
 
     # Resume from a persisted pause if this is a --reply continuation.
     saved = _load_state(name) if reply is not None else {}
@@ -416,11 +424,34 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--initial-args", default="",
                         help="JSON object of initial slot values")
     parser.add_argument("--runtime", default=None,
-                        help="force a runtime (claude-code, codex, …); "
+                        help="force a runtime (claude-code, hermes, codex, …); "
                              "default = auto-detect")
     parser.add_argument("--reply", default=None,
                         help="user's answer to a prior pause; resumes the run")
+    parser.add_argument(
+        "--runtime-command", default=None,
+        help="override the CLI runtime's spawn argv as a JSON array; the "
+             "token \"{prompt}\" is replaced with each segment prompt. e.g. "
+             "'[\"hermes\",\"-z\",\"{prompt}\",\"--yolo\",\"--provider\","
+             "\"anthropic\",\"-m\",\"claude-opus\"]'",
+    )
     args = parser.parse_args(argv)
+
+    runtime_command: list[str] | None = None
+    if args.runtime_command and args.runtime_command.strip():
+        try:
+            parsed_cmd = json.loads(args.runtime_command)
+        except json.JSONDecodeError as e:
+            print(json.dumps({"status": "error",
+                              "error": f"--runtime-command not valid JSON: {e}"}))
+            return 2
+        if not (isinstance(parsed_cmd, list)
+                and all(isinstance(t, str) for t in parsed_cmd)):
+            print(json.dumps({"status": "error",
+                              "error": "--runtime-command must be a JSON array "
+                                       "of strings"}))
+            return 2
+        runtime_command = parsed_cmd
 
     initial_args: dict = {}
     if args.initial_args.strip():
@@ -442,6 +473,7 @@ def main(argv: list[str] | None = None) -> int:
             initial_args=initial_args,
             runtime_name=args.runtime,
             reply=args.reply,
+            runtime_command=runtime_command,
         ))
     except LocalWorkflowError as e:
         print(json.dumps({"status": "error", "error": str(e)}))

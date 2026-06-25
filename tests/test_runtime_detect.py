@@ -68,3 +68,35 @@ def test_runtime_config_defaults():
     cfg = d.runtime_config("claude-code", {})
     assert cfg.command[0] == "claude"
     assert "{prompt}" in cfg.command
+
+
+def test_explicit_hermes_settings(monkeypatch):
+    monkeypatch.delenv(d.RUNTIME_ENV, raising=False)
+    assert d.detect_runtime_name({"runtime": "hermes"}) == "hermes"
+
+
+def test_hermes_binary_probe(monkeypatch):
+    monkeypatch.delenv(d.RUNTIME_ENV, raising=False)
+    for m in _ALL_MARKERS + ("HERMES_HOME", "HERMES_SESSION"):
+        monkeypatch.delenv(m, raising=False)
+    # Only `hermes` on PATH -> hermes selected via the binary probe.
+    monkeypatch.setattr(
+        d.shutil, "which", lambda b: "/usr/bin/hermes" if b == "hermes" else None)
+    assert d.detect_runtime_name({}) == "hermes"
+
+
+def test_explicit_runtime_beats_hermes_probe(monkeypatch):
+    # An explicitly-pinned host (claude-code env marker) wins over the hermes
+    # binary merely being installed — hermes is probed last for this reason.
+    monkeypatch.delenv(d.RUNTIME_ENV, raising=False)
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setattr(d.shutil, "which", lambda _b: "/usr/bin/hermes")
+    assert d.detect_runtime_name({}) == "claude-code"
+
+
+def test_hermes_runtime_config_defaults():
+    cfg = d.runtime_config("hermes", {})
+    assert cfg.command[0] == "hermes"
+    assert "-z" in cfg.command
+    assert "--yolo" in cfg.command
+    assert "{prompt}" in cfg.command

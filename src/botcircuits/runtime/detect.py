@@ -31,6 +31,7 @@ SELF = "self"
 CLAUDE_CODE = "claude-code"
 CODEX = "codex"
 OPENCLAW = "openclaw"
+HERMES = "hermes"
 
 #: Settings/env key naming the runtime explicitly.
 RUNTIME_ENV = "BOTCIRCUITS_RUNTIME"
@@ -78,11 +79,30 @@ _REGISTRY: dict[str, _RuntimeSpec] = {
         binary="openclaw",
         command=("openclaw", "run", "{prompt}", "--json"),
     ),
+    # Hermes headless oneshot (`-z/--oneshot`): single-turn, prints ONLY the
+    # model's final reply to stdout (the internal run goes to devnull), so the
+    # JSON contract rides in that final text — `extract_json_object` handles a
+    # bare/fenced object fine. `--yolo` is hermes' auto-approve (claude-code's
+    # implicit project-permission equivalent). No `--output-format json`: hermes
+    # has none, so usage is harvested from its session store instead of stdout
+    # (see HermesRuntime). `--skills` is intentionally omitted — a segment prompt
+    # is self-contained (the engine already planned), so no skill load is needed.
+    HERMES: _RuntimeSpec(
+        HERMES,
+        # Hermes doesn't reliably export a child-visible session marker, so the
+        # PATH probe below is the real detector; HERMES_HOME is a best-effort
+        # hint when a host happens to export it.
+        env_markers=("HERMES_HOME", "HERMES_SESSION"),
+        binary="hermes",
+        command=("hermes", "-z", "{prompt}", "--yolo"),
+    ),
 }
 
 #: Order auto-detection probes runtimes in. Native is the implicit default,
-#: not probed.
-_DETECT_ORDER = (CLAUDE_CODE, CODEX, OPENCLAW)
+#: not probed. Hermes is probed last: claude-code/codex/openclaw set definitive
+#: env markers, while hermes leans on the binary probe, so it shouldn't shadow
+#: a host that announced itself explicitly.
+_DETECT_ORDER = (CLAUDE_CODE, CODEX, OPENCLAW, HERMES)
 
 
 def _truthy_env(name: str) -> bool:
@@ -192,6 +212,13 @@ def select_runtime(
 
     # CLI providers. Imported lazily so `native`-only callers don't pull the
     # CLI exec machinery (and so a missing provider module is a clear error).
+    if chosen == HERMES:
+        # Hermes reuses the whole claude-code segment/slot contract; it only
+        # overrides where usage comes from (session store, not stdout).
+        from botcircuits.runtime.providers.hermes import HermesRuntime
+
+        return HermesRuntime(config)
+
     from botcircuits.runtime.providers.claude_code import ClaudeCodeRuntime
 
     if chosen in (CLAUDE_CODE, CODEX, OPENCLAW):
@@ -211,6 +238,7 @@ __all__ = [
     "CLAUDE_CODE",
     "CODEX",
     "OPENCLAW",
+    "HERMES",
     "RUNTIME_ENV",
     "detect_runtime_name",
     "runtime_config",

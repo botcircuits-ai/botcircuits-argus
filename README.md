@@ -32,59 +32,49 @@ When a workflow runs, the deterministic engine walks the state machine in a back
 ```
 ---
 
-## Quick Start
+## Installation
 
-### 1. Install the package
+Argus runs inside a host agent. Install the agent you want, then install Argus
 
-```bash
-# Install uv if you don't have it: https://docs.astral.sh/uv/
-git clone https://github.com/botcircuits-ai/botcircuits-agent
-cd botcircuits-agent
-uv venv --python 3.11 && source .venv/bin/activate
-uv sync
-```
+### 1. Install a host agent (if you don't have one)
 
-The skills shell out to the `botcircuits` cli. no LLM API key is needed: your host
-agent brings its own model.
 
-### 2. Install the skills into your agent
+### 2. Install BotCircuits Argus
 
 ```bash
-# Claude Code (personal scope, ~/.claude/skills) — the default
-scripts/install-skills.sh
-
-# Project scope, or another agent (e.g. Hermes):
-scripts/install-skills.sh --target .claude/skills
-scripts/install-skills.sh --target ~/.hermes/skills
-
-# Develop against the repo (symlink instead of copy):
-scripts/install-skills.sh --link
+curl -fsSL https://raw.githubusercontent.com/botcircuits-ai/botcircuits-argus/main/scripts/install.sh | bash
 ```
 
-This copies `botcircuits-workflow-authoring` and `botcircuits-workflow-running`
-into the agent's skills directory.
+### 3. Install SKILLs
 
-### 3. Use them in natural language
-
-```
-# Author
-claude > "create an order fulfillment workflow: check stock; if all items are
-          in stock, ship; otherwise create a backorder and notify the customer"
-
-# Run
-claude > "run order fulfillment for order #1024"
-```
-
-The authoring skill writes `.botcircuits/workflows/order_fulfillment.json` and
-builds it; the running skill kicks off the engine, which runs each step in its
-own agent process, pausing to ask you for input only when a step needs human
-feedback, and reporting the result at the end.
-
----
+```bashbotcircuits skills install [--agent claude|hermes] [--link]``` | Install the workflow skills into a host agent (default: `~/.claude/skills`)
 
 ## Workflows
 
-### Shape
+### Workflow authoring
+You can simply converse with your AI agent to generate the initial structure naturally. If you prefer a visual approach, you can map out the logic using the UI flow editor using manager.
+
+```
+claude > "create an order fulfillment workflow: check stock; if all items are in stock, ship; otherwise create a backorder and notify the customer"
+```
+
+### Workflow run
+```
+claude > "run order fulfillment for order #1024"
+```
+
+> Same thing inside Hermes (`hermes "run order fulfillment …"`). The host agent follows the skills and shells out to the `botcircuits` CLI for you.
+
+### How it works
+The raw file is *not* what runs. **workflow-builder** compiles each natural-language `condition` into a deterministic `choices[]` entry and emits an aggregated `flow.variables` list.
+
+The runtime only loads from `.botcircuits/workflows/.build/`. The authoring skill builds for you automatically.
+
+- `.botcircuits/workflows/*.json` — your authored sources (override the dir with `BOTCIRCUITS_WORKFLOWS_DIR`).
+- `.botcircuits/workflows/.build/` — built, runnable copies.
+- `.botcircuits/workflows/.runs/` — transient pause/resume cursors.
+
+#### Workflow Shape
 
 A workflow is one JSON file under `.botcircuits/workflows/`:
 
@@ -110,53 +100,15 @@ A workflow is one JSON file under `.botcircuits/workflows/`:
   }
 }
 ```
-
-`name` is the identifier; it must match `^[a-zA-Z0-9_-]+$`. Step types are
-`start`, `agentAction`, `question`, and `systemAction`. To branch, attach a
-`conditions` list at the **step root** (a sibling of `type`/`next`, not nested
-in `settings`); the step's own `next` is the default ("otherwise") branch.
-
-### Build
-
-The raw file is *not* what runs. **Building** compiles each natural-language
-`condition` into a deterministic `choices[]` entry and emits an aggregated
-`flow.variables` list.
-
-The runtime only loads from `.botcircuits/workflows/.build/`. The authoring
-skill builds for you automatically.
-
-### Where things live
-
-- `.botcircuits/workflows/*.json` — your authored sources (override the dir with
-  `BOTCIRCUITS_WORKFLOWS_DIR`).
-- `.botcircuits/workflows/.build/` — built, runnable copies.
-- `.botcircuits/workflows/.runs/` — transient pause/resume cursors.
-
----
-
-## Skills
-
-A **skill** is a folder with a `SKILL.md` an agent reads from disk. BotCircuits
-ships its functionality *as* skills:
-
-```
-skills/
-├── botcircuits-workflow-authoring/SKILL.md
-├── botcircuits-workflow-running/SKILL.md 
-```
-
-`SKILL.md` frontmatter declares a `name` and a `description` (which the agent
-uses to decide when to invoke it); `allowed-tools` (optional) restricts which
-tools the skill may call. The same folders work in any agent that supports
-
+- Step types are `start`, `agentAction`, and `question`. 
+- To branch, attach a `conditions` list at the **step root** (a sibling of `type` and `next`)
 ---
 
 ## Argus Web Manager
 
 Use the BotCircuits Manager to author workflows, edit them via the visual Flow UI, and monitor execution traces.
 
-- username/password override with `BOTCIRCUITS_MANAGER_ADMIN_USERNAME` / `_ADMIN_PASSWORD`, 
-- **Manager Web** — See [manager_web/README.md](manager_web/README.md).
+- username/password override with `BOTCIRCUITS_MANAGER_ADMIN_USERNAME` / `_ADMIN_PASSWORD`, or default `admin`/`admin`
 
 ```bash
 # Start the manager

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from typing import Any
 
 from botcircuits.runtime.base import AgentRuntimeProvider, EventSink, RuntimeConfig
@@ -109,21 +110,21 @@ class ClaudeCodeRuntime(AgentRuntimeProvider):
 
     # -- segment execution --------------------------------------------------
 
-    async def run_segment(
+    def _build_segment_prompt(
         self,
         *,
         actions: list[str],
         branch_variables: list[dict],
         system_notes: list[str],
         slots: dict[str, Any],
-        item_variables: list[dict] | None = None,
-        data_variables: list[dict] | None = None,
-        event_sink: EventSink | None = None,
-    ) -> SegmentResult:
-        """Run one segment by invoking the host CLI once.
+        item_variables: list[dict] | None,
+        data_variables: list[dict] | None,
+    ) -> str:
+        """Assemble the full segment prompt (engine system prompt + output
+        contract + segment message + carried-memory / resume blocks).
 
-        `event_sink` is ignored — headless one-shot mode has no incremental
-        events to stream; the host shows its own progress.
+        Factored out so subclasses driving a different CLI (e.g. Hermes) reuse
+        the exact same prompt without re-implementing the run loop.
         """
         user_msg = build_segment_user_message(
             actions, branch_variables, system_notes,
@@ -173,7 +174,7 @@ class ClaudeCodeRuntime(AgentRuntimeProvider):
             "reply genuinely does not answer it.\n"
             f"User reply: {last_user}"
         ) if last_user else ""
-        prompt = (
+        return (
             ENGINE_SYSTEM_PROMPT
             + _CLI_OUTPUT_CONTRACT
             + "\n\n=== SEGMENT ===\n"
@@ -181,6 +182,43 @@ class ClaudeCodeRuntime(AgentRuntimeProvider):
             + memory_block
             + context_block
         )
+
+    def _attach_usage(self, result: SegmentResult, stdout: str,
+                      *, prompt: str, launched_at: float) -> None:
+        """Attach this segment's real token usage to `result`.
+
+        claude-code (and codex/openclaw) report a `usage` block on their JSON
+        stdout, so we parse it out. Subclasses whose CLI hides usage from stdout
+        (Hermes) override this to read it from elsewhere. `prompt`/`launched_at`
+        are supplied for those out-of-band lookups; this base impl ignores them.
+        """
+        result.usage = usage_from_stdout(stdout, runtime=self.name)
+
+    async def run_segment(
+        self,
+        *,
+        actions: list[str],
+        branch_variables: list[dict],
+        system_notes: list[str],
+        slots: dict[str, Any],
+        item_variables: list[dict] | None = None,
+        data_variables: list[dict] | None = None,
+        event_sink: EventSink | None = None,
+    ) -> SegmentResult:
+        """Run one segment by invoking the host CLI once.
+
+        `event_sink` is ignored — headless one-shot mode has no incremental
+        events to stream; the host shows its own progress.
+        """
+        prompt = self._build_segment_prompt(
+            actions=actions,
+            branch_variables=branch_variables,
+            system_notes=system_notes,
+            slots=slots,
+            item_variables=item_variables,
+            data_variables=data_variables,
+        )
+        launched_at = time.time()
 
         try:
             res = await run_cli(
@@ -207,12 +245,14 @@ class ClaudeCodeRuntime(AgentRuntimeProvider):
             )
 
         result = segment_result_from_stdout(res.stdout)
-        # Attach the real token usage this segment billed, when the host CLI
-        # reports it on stdout (claude-code's `--output-format json` /
-        # codex/openclaw's `--json` carry a `usage` block). The engine folds
-        # this into the run's per-action-step token breakdown. None when the
-        # runtime reports nothing — the run simply shows no usage for it.
-        result.usage = usage_from_stdout(res.stdout, runtime=self.name)
+        # Attach the real token usage this segment billed. The engine folds it
+        # into the run's per-action-step token breakdown; None when the runtime
+        # reports nothing — the run simply shows no usage for it. Where usage
+        # lives is runtime-specific (stdout for claude-code, the session store
+        # for hermes), so it goes through `_attach_usage`.
+        self._attach_usage(
+            result, res.stdout, prompt=prompt, launched_at=launched_at,
+        )
         return result
 
     # -- slot resolution ----------------------------------------------------

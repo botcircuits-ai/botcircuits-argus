@@ -16,7 +16,7 @@ traces this UI reads:
 # from the repo root
 export BOTCIRCUITS_MANAGER_ADMIN_USERNAME=admin
 export BOTCIRCUITS_MANAGER_ADMIN_PASSWORD=change-me
-botcircuits-manager            # serves http://127.0.0.1:8700
+botcircuits manager start --backend-only   # serves http://127.0.0.1:8700
 ```
 
 Workflow runs write their traces to `.botcircuits/sessions/*-session.json`; the

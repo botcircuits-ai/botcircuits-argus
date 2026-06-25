@@ -1,5 +1,7 @@
-"""Run the manager backend with `python -m botcircuits.manager` or the
-`botcircuits-manager` console script.
+"""Run the manager backend with `python -m botcircuits.manager`.
+
+This is the raw uvicorn bootstrap; the user-facing entry point is
+`botcircuits manager start` (which can also launch the web frontend).
 
 Env:
   BOTCIRCUITS_MANAGER_HOST   (default 127.0.0.1)
