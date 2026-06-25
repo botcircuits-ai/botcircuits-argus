@@ -58,14 +58,13 @@ botcircuits skills install [--agent claude|hermes] [--link]
 
 ### 4. Select the runtime (`settings.runtime`)
 
-Argus dispatches work to an **agent runtime** — the host that actually carries out the work, both when **authoring/building** a workflow and when **running** one. It resolves which runtime to use in this order (first hit wins):
+Argus dispatches work to an **agent runtime** — the host that actually carries out the work, both when **authoring/building** a workflow and when **running** one. It resolves which runtime to use in this order (first hit wins). If no runtime set, default use **claude**:
 
 1. The `BOTCIRCUITS_RUNTIME` environment variable.
 2. The `runtime` key in `.botcircuits/settings.json`.
 3. Auto-detection (env markers the host CLI sets, then a `PATH` probe for a known binary).
-4. Default: `native` (the in-process loop).
 
-Supported values: `claude-code`, `codex`, `openclaw`, `hermes`, `native`, `self`.
+Supported values: `claude-code`, `codex`, `openclaw`, `hermes`.
 
 > **Non-Claude agents: pin `runtime` explicitly.** Auto-detection is reliable for Claude Code (it exports `CLAUDECODE` / `CLAUDE_CODE_*` env markers), but other hosts are best-effort — Hermes, for example, doesn't reliably export a child-visible session marker and is only found by a `PATH` probe, so it can be missed or shadowed. To guarantee both authoring and runs are dispatched to the right host, set it in `.botcircuits/settings.json`:
 
