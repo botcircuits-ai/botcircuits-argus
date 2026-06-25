@@ -1,0 +1,10 @@
+{
+  "name": "incident-postmortem-pipeline-mock-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Mock incident-management API for the incident_postmortem_pipeline workflow example.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

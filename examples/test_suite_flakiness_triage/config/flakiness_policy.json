@@ -1,0 +1,13 @@
+{
+  "org": "Acme Corp",
+  "repo": "acme/checkout-platform",
+  "policy_id": "FLAKE-TRIAGE-2026.06",
+  "triage_approved": true,
+  "qa_lead_contact": "Priya Raman (qa-lead@acme.dev, pager 7741)",
+  "analysis_window_days": 14,
+  "data_freshness_max_hours": 6,
+  "flakiness_rate_threshold_pct": 8.0,
+  "quarantine_budget": 4,
+  "min_tests_required": 5,
+  "notes": "Nightly flakiness triage over the full regression suite. Quarantine only what's over threshold, release stable tests back into the active suite, and route real bugs / timing / environment issues to the right owners instead of silently skipping them."
+}

@@ -1,0 +1,14 @@
+{
+  "org": "northwind-platform",
+  "pipeline_run_id": "nightly-2026-06-25-03",
+  "triage_enabled": true,
+  "approved": true,
+  "on_call_engineer": "j.alvarez",
+  "flaky_retry_budget": 3,
+  "max_queue_depth": 200,
+  "min_jobs_required": 5,
+  "compile_blocker_budget": 2,
+  "infra_blocker_budget": 3,
+  "flaky_failure_rate_threshold": 0.3,
+  "notes": "Nightly unattended CI triage sweep across all org repos. Auto-retry infra/flaky jobs up to budget, page on-call for build-blocking failures on main, quarantine chronic flaky tests."
+}

@@ -1,0 +1,15 @@
+{
+  "repo": "acme/checkout-service",
+  "pr_number": 4821,
+  "base_branch": "main",
+  "required_approvals": 2,
+  "approvals_received": 2,
+  "ready_for_merge": true,
+  "policy_approved": true,
+  "merge_window_open": true,
+  "max_critical_findings": 0,
+  "max_high_findings": 0,
+  "max_lint_warnings": 5,
+  "min_files_required": 3,
+  "notes": "Standard PR merge gate. Block on any critical security finding or lint error; queue duplicates, large diffs, and lint-warning overflows for manual review."
+}

@@ -1,0 +1,10 @@
+{
+  "name": "test-suite-flakiness-triage-mock-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Mock test-analytics API for the test_suite_flakiness_triage workflow example.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "ci-pipeline-triage-mock-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Mock CI metrics API for the ci_pipeline_triage workflow example.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

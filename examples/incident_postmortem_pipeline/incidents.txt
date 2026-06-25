@@ -1,0 +1,12 @@
+sev1_payments_outage
+sev2_checkout_latency
+sev3_minor_ui_glitch
+minor_typo_alert
+recur_db_failover
+selfresolved_cache_blip
+databreach_customer_pii
+security_token_leak
+noeng_orphaned_alert
+breach_slow_ack_ticket
+FAIL_billing_pipeline
+ghost_unknown_ticket

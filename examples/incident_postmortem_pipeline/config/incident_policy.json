@@ -1,0 +1,16 @@
+{
+  "org": "Northwind Cloud Platform",
+  "oncall_period_id": "2026-W26",
+  "process_approved": true,
+  "incident_commander": "J. Alvarez (pager 7741, ic-oncall@northwind.example)",
+  "legal_compliance_contact": "legal-compliance@northwind.example",
+  "sla_minutes_by_severity": {
+    "sev1": 15,
+    "sev2": 30,
+    "sev3": 120
+  },
+  "min_incidents_required": 4,
+  "mandatory_postmortem_budget": 3,
+  "recurring_escalation_budget": 2,
+  "notes": "End-of-shift postmortem triage for the on-call period above. Mandatory blameless postmortems for Sev1/Sev2 and customer-facing incidents; escalate recurring patterns to engineering leadership; route security incidents to legal/compliance; flag any incident with no assigned engineer as an on-call process gap."
+}

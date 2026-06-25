@@ -1,0 +1,10 @@
+{
+  "name": "code-review-gate-mock-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Mock code-quality scan API for the code_review_gate workflow example.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
