@@ -1,6 +1,6 @@
-# Botcircuits Argus
+# BotCircuits Argus
 
-**Argus** helps AI agent (Claude, Codex, OpenClaw, Hermes, etc.) to run your workflows **predictably**, **traceably**, and **cost-efficiently**. It achieves this through a combination of structured flow control and stateful memory context.
+**Argus** helps AI agents (Claude, Codex, OpenClaw, Hermes, etc.) run your workflows **predictably**, **traceably**, and **cost-efficiently**. It achieves this through a combination of structured flow control and stateful memory context.
 
 ```
 claude > "create an order fulfillment workflow with stock check, ship, and backorder branches"
@@ -8,10 +8,10 @@ claude > "run order fulfillment"
 ```
 
 ## Structured flow control 
-Traditionally, AI agents are left to guess their next move, leading to unpredictable reasoning loops. Argus SKILL introduces a much more effective model: structured flow control.
+Traditionally, AI agents are left to guess their next move, leading to unpredictable reasoning loops. By defining your processes as declarative workflows, the engine acts as the primary navigator. It handles all routing, ensuring the AI only executes actions when explicitly directed. This guarantees that every task follows a secure, approved, and repeatable path.
 
 ## Stateful memory context
-Complex tasks require perfect continuity. This SKILL enables your agent to handle multi-step workflows without ever losing track.
+Complex tasks require perfect continuity. Argus automatically capture changes in memory states. Instead of forcing the AI to rely on a long, fragile context window, Argus provides the agent with exactly what is needed for the next immediate step. This keeps the agent entirely focused, boosting overall reliability while significantly lowering token costs.
 
 
 ![botcircuits-agent-solution](docs/solution.png)
@@ -24,17 +24,20 @@ Argus ships **two skills** your agent loads:
 
 | Skill | The user says… | The agent does… |
 |---|---|---|
-| **botcircuits-workflow-authoring** | _"create an order fulfillment workflow with …"_ | Writes the workflow JSON and builds it. |
-| **botcircuits-workflow-running** | _"run order fulfillment"_ | runs workflow, the **deterministic engine** works in a background and dispatches each action to ai agent |
+| **botcircuits-workflow-authoring** | _"create an order fulfillment workflow with …"_ | Writes the workflow JSON and **builds** it into a runnable state machine. |
+| **botcircuits-workflow-running** | _"run order fulfillment"_ | Runs the workflow — the **deterministic engine** drives navigation in the background and dispatches each action to the AI agent. |
 
 ---
 
 ## Installation
 
-Argus runs inside a host agent. Install the agent you want, then install Argus
+Argus runs inside a host agent. Install the agent you want, then install Argus.
 
 ### 1. Install a host agent (if you don't have one)
 
+Argus is driven by a host AI coding agent. Install whichever you prefer, for example:
+- **Claude Code**
+- **Hermes**
 
 ### 2. Install BotCircuits Argus
 
@@ -42,34 +45,104 @@ Argus runs inside a host agent. Install the agent you want, then install Argus
 curl -fsSL https://raw.githubusercontent.com/botcircuits-ai/botcircuits-argus/main/scripts/install.sh | bash
 ```
 
-### 3. Install SKILLs
+### 3. Install the skills
 
-```bashbotcircuits skills install [--agent claude|hermes] [--link]``` | Install the workflow skills into a host agent (default: `~/.claude/skills`)
+Install the workflow skills into your host agent (defaults to `~/.claude/skills`):
+
+```bash
+botcircuits skills install [--agent claude|hermes] [--link]
+```
+
+- `--agent` — target host agent (default: `claude`).
+- `--link` — symlink the skills instead of copying, so updates to Argus are picked up automatically.
+
+### 4. Select the runtime (`settings.runtime`)
+
+Argus dispatches work to an **agent runtime** — the host that actually carries out the work, both when **authoring/building** a workflow and when **running** one. It resolves which runtime to use in this order (first hit wins):
+
+1. The `BOTCIRCUITS_RUNTIME` environment variable.
+2. The `runtime` key in `.botcircuits/settings.json`.
+3. Auto-detection (env markers the host CLI sets, then a `PATH` probe for a known binary).
+4. Default: `native` (the in-process loop).
+
+Supported values: `claude-code`, `codex`, `openclaw`, `hermes`, `native`, `self`.
+
+> **Non-Claude agents: pin `runtime` explicitly.** Auto-detection is reliable for Claude Code (it exports `CLAUDECODE` / `CLAUDE_CODE_*` env markers), but other hosts are best-effort — Hermes, for example, doesn't reliably export a child-visible session marker and is only found by a `PATH` probe, so it can be missed or shadowed. To guarantee both authoring and runs are dispatched to the right host, set it in `.botcircuits/settings.json`:
+
+```json
+{
+  "runtime": "hermes"
+}
+```
+
+If a host's CLI isn't on your `PATH`, or it needs different flags, override its launch command (and optionally `timeout` / `cwd`) under `runtimes`:
+
+```json
+{
+  "runtime": "hermes",
+  "runtimes": {
+    "hermes": {
+      "command": ["hermes", "-z", "{prompt}", "--yolo"],
+      "timeout": 600
+    }
+  }
+}
+```
+
+`{prompt}` is the placeholder Argus substitutes with each step's segment prompt.
 
 ## Workflows
 
-### Workflow authoring
-You can simply converse with your AI agent to generate the initial structure naturally. If you prefer a visual approach, you can map out the logic using the UI flow editor using manager.
+A workflow goes through two phases: you **author** it (describe the process and write the flow json), then it is **built** into a deterministic, runnable form, which the engine then **runs**. Authoring and building happen together. running is a separate step you trigger later.
+
+### 1. Authoring
+Converse with your AI agent to generate the structure naturally — describe the process in plain business language and the authoring skill writes the workflow JSON for you. If you prefer a visual approach, you can map out the logic in the [Argus Web Manager](#argus-web-manager) flow editor.
 
 ```
-claude > "create an order fulfillment workflow: check stock; if all items are in stock, ship; otherwise create a backorder and notify the customer"
+claude > "create an order fulfillment workflow: check stock; if all items are in stock, ship. otherwise create a backorder and notify the customer"
 ```
 
-### Workflow run
+This writes your source file to `.botcircuits/workflows/<name>.json` and then builds it automatically (see [Building](#2-building) below).
+
+### 2. Building
+
+**The raw JSON you author is _not_ what runs.** A build step turns the human-readable source into a deterministic state machine that the engine can execute without guessing. This is what makes runs predictable and traceable.
+
+When you build a workflow, **workflow-builder**:
+
+- **Compiles each natural-language `condition`** (e.g. `"all items are in stock"`) into a deterministic `choices[]` entry — a concrete rule the engine evaluates the same way every time, with no model interpretation at navigation time.
+- **Aggregates a `flow.variables` list** across all steps, so the engine knows exactly which variables the workflow reads and writes and can supply the agent only the context needed for the next step.
+- **Writes the runnable copy** to `.botcircuits/workflows/.build/<name>.json`.
+
+The authoring skill builds for you automatically. You can also build (or rebuild after a manual edit) explicitly:
+
+```bash
+botcircuits workflow build --name order_fulfillment
+```
+
+> **Always rebuild after editing the raw source.** The engine never reads your `*.json` source directly — only the `.build/` copy. Until you rebuild, your changes won't take effect at run time.
+
+#### Where files live
+
+- `.botcircuits/workflows/*.json` — your authored sources, the editable source of truth (override the dir with `BOTCIRCUITS_WORKFLOWS_DIR`).
+- `.botcircuits/workflows/.build/` — built, runnable copies. **This is the only thing the runtime loads.**
+- `.botcircuits/workflows/.runs/` — transient pause/resume cursors for in-progress runs.
+
+### 3. Running
+
 ```
 claude > "run order fulfillment for order #1024"
 ```
 
 > Same thing inside Hermes (`hermes "run order fulfillment …"`). The host agent follows the skills and shells out to the `botcircuits` CLI for you.
 
-### How it works
-The raw file is *not* what runs. **workflow-builder** compiles each natural-language `condition` into a deterministic `choices[]` entry and emits an aggregated `flow.variables` list.
+**What the build buys you at run time:** because navigation was compiled ahead of time, the **deterministic engine** — not the AI — decides which step comes next. The engine loads the built workflow from `.build/`, walks the state machine step by step, evaluates the compiled `choices[]` to pick each branch, and dispatches only the current action to the AI agent along with just the variables that step needs. The result: the same inputs always follow the same path, every step is traceable, and the agent never burns tokens reasoning about routing.
 
-The runtime only loads from `.botcircuits/workflows/.build/`. The authoring skill builds for you automatically.
+You can also run directly via the CLI:
 
-- `.botcircuits/workflows/*.json` — your authored sources (override the dir with `BOTCIRCUITS_WORKFLOWS_DIR`).
-- `.botcircuits/workflows/.build/` — built, runnable copies.
-- `.botcircuits/workflows/.runs/` — transient pause/resume cursors.
+```bash
+botcircuits workflow run --name order_fulfillment --initial-args '{"order_id": "1024"}'
+```
 
 #### Workflow Shape
 
