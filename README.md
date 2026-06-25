@@ -167,7 +167,8 @@ A workflow is one JSON file under `.botcircuits/workflows/`:
 ```
 - Step types are `start`, `agentAction`, and `question`. 
 - To branch, attach a `conditions` list at the **step root** (a sibling of `type` and `next`)
----
+
+## [Use cases](examples) 
 
 ## Argus Web Manager
 
