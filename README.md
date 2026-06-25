@@ -188,6 +188,79 @@ botcircuits manager stop
 
 ---
 
+## Claude Code vs Claude Code + Argus — Comparison
+
+model: `claude-opus-4-8` · 3 use case(s)_
+
+Two agents on the identical `claude` binary + model. **claude-code** free-runs the task from the prompt; **claude-code-argus** drives the built BotCircuits workflow through the deterministic engine (one `claude -p` call per branch segment).
+
+```
+Accuracy = per-item decisions vs the deterministic oracle. 
+
+Consistency = fraction of repeats agreeing on the modal answer. 
+
+Cost/tokens/latency are per-run averages.
+
+Usage is the agents' real reported usage.
+```
+
+### Summary
+
+| | claude-code (bare) | claude-code + argus | Workflow advantage |
+|---|---|---|---|
+| Mean accuracy | 100% | 100% | +0 pts |
+| Mean consistency | 1.00 | 1.00 | = |
+| Total tokens (sum) | 431,876 | 11,503 | 38× fewer |
+| Total cost (sum) | $1.1996 | $0.8602 | 1.4× cheaper |
+| Total latency (sum) | 260.8s | 182.1s | 1.4× faster |
+| Total LLM calls (sum) | 29 | 5 | 5.8× fewer |
+
+### Per use case
+
+#### [shipment_tracking](examples/shipment_tracking/TASK.md) 
+
+_Batch parcel-status classification (carrier API) · repeats: 3_
+
+| Metric | claude-code | claude-code + argus | Δ |
+|---|---|---|---|
+| Accuracy | 100% | 100% | |
+| Consistency | 1.00 | 1.00 | |
+| Avg tokens | 186,560 | 2,499 | 75× |
+| Avg cost | $0.4873 | $0.1872 | 2.6× |
+| Avg LLM calls | 11 | 1 | |
+| Avg latency | 120.2s | 25.0s | 4.8× |
+| Run status | ok | ok | |
+
+#### [lab_results_triage](examples/lab_results_triage/TASK.md) 
+
+_Per-order clinical triage (lab/EHR API) · repeats: 3_
+
+| Metric | claude-code | claude-code + argus | Δ |
+|---|---|---|---|
+| Accuracy | 100% | 100% | |
+| Consistency | 1.00 | 1.00 | |
+| Avg tokens | 153,767 | 5,044 | 30× |
+| Avg cost | $0.3665 | $0.3774 | 1.0× |
+| Avg LLM calls | 10 | 3 | |
+| Avg latency | 76.9s | 77.6s | 1.0× |
+| Run status | ok | ok | |
+
+#### [ai_trends](examples/ai_trends/TASK.md) 
+
+_Linear AI-trends summary (completion-graded) · repeats: 3_
+
+| Metric | claude-code | claude-code + argus | Δ |
+|---|---|---|---|
+| Accuracy | 100% | 100% | |
+| Consistency | 1.00 | 1.00 | |
+| Avg tokens | 91,549 | 3,960 | 23× |
+| Avg cost | $0.3458 | $0.2956 | 1.2× |
+| Avg LLM calls | 8 | 1 | |
+| Avg latency | 63.7s | 79.5s | 0.8× |
+| Run status | ok | ok | |
+
+---
+
 ## License
 
 Licensed under the Apache License, Version 2.0 — [LICENSE](LICENSE)
