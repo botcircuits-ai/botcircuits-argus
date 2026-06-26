@@ -1,6 +1,14 @@
-# BotCircuits Argus
+<h1 align="center">Argus</h1>
 
-An agent skill (Claude, Hermes, etc.) that runs your workflows **predictably**, **traceably**, and **cost-efficiently** — cutting **~90%** of tokens usage while keeping full accuracy. It achieves this through a combination of structured flow control and stateful memory context.
+<p align="center">
+  <strong>Enforce structure where it must hold. Reason only where it's needed.</strong>
+</p>
+
+---
+
+An agent skill (Claude, Hermes, etc.) that runs your repetitive workflows **predictably**, **traceably**, and **cost-efficiently** — cutting **~90%** of tokens usage while keeping full accuracy.
+
+Why let your LLM agent reason through every routing decision — even when the path is repetitive and predictable?
 
 ![botcircuits-agent-solution](docs/comparison.png)
 
