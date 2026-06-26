@@ -19,10 +19,10 @@ claude > "run order fulfillment"
 Why let your LLM agent reason through every routing decision — even when the path is repetitive and predictable?
 
 ## Structured flow control 
-Traditionally, AI agents are left to guess their next move, leading to unpredictable reasoning loops. By defining your processes as declarative workflows, the engine acts as the primary navigator. It handles all routing, ensuring the AI only executes actions when explicitly directed. This guarantees that every task follows a secure, approved, and repeatable path.
+**Replace guesswork with deterministic workflows**. Argus controls navigation, ensuring AI agents follow secure, approved, and repeatable execution paths instead of reasoning through every step.
 
 ## Stateful memory context
-Complex tasks require perfect continuity. Argus automatically capture changes in memory states. Instead of forcing the AI to rely on a long, fragile context window, Argus provides the agent with exactly what is needed for the next immediate step. This keeps the agent entirely focused, boosting overall reliability while significantly lowering token costs.
+**Provide only the context that matters**. Argus tracks state changes and supplies the agent with the exact memory needed for the current step, improving reliability while reducing token usage.
 
 ---
 
