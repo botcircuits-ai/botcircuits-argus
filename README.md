@@ -8,14 +8,15 @@
 
 An agent skill (Claude, Hermes, etc.) that runs your repetitive workflows **predictably**, **traceably**, and **cost-efficiently** — cutting **~90%** of tokens usage while keeping full accuracy.
 
-Why let your LLM agent reason through every routing decision — even when the path is repetitive and predictable?
-
 ![botcircuits-agent-solution](docs/comparison.png)
 
 ```
 claude > "create an order fulfillment workflow with stock check, ship, and backorder branches"
 claude > "run order fulfillment"
 ```
+
+
+Why let your LLM agent reason through every routing decision — even when the path is repetitive and predictable?
 
 ## Structured flow control 
 Traditionally, AI agents are left to guess their next move, leading to unpredictable reasoning loops. By defining your processes as declarative workflows, the engine acts as the primary navigator. It handles all routing, ensuring the AI only executes actions when explicitly directed. This guarantees that every task follows a secure, approved, and repeatable path.
