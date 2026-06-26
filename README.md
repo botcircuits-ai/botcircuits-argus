@@ -1,6 +1,6 @@
 # BotCircuits Argus
 
-**Argus** helps AI agents (Claude, Codex, OpenClaw, Hermes, etc.) run your workflows **predictably**, **traceably**, and **cost-efficiently**. It achieves this through a combination of structured flow control and stateful memory context.
+An agent skill (Claude, Hermes, etc.) that runs your workflows **predictably**, **traceably**, and **cost-efficiently** — cutting ~90% of output tokens while keeping full accuracy. It achieves this through a combination of structured flow control and stateful memory context.
 
 ![botcircuits-agent-solution](docs/comparison.png)
 
