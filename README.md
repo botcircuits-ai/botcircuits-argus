@@ -1,6 +1,6 @@
 # BotCircuits Argus
 
-An agent skill (Claude, Hermes, etc.) that runs your workflows **predictably**, **traceably**, and **cost-efficiently** — cutting ~90% of output tokens while keeping full accuracy. It achieves this through a combination of structured flow control and stateful memory context.
+An agent skill (Claude, Hermes, etc.) that runs your workflows **predictably**, **traceably**, and **cost-efficiently** — cutting **~90%** of tokens usage while keeping full accuracy. It achieves this through a combination of structured flow control and stateful memory context.
 
 ![botcircuits-agent-solution](docs/comparison.png)
 
