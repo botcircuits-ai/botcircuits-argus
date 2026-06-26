@@ -2,6 +2,8 @@
 
 **Argus** helps AI agents (Claude, Codex, OpenClaw, Hermes, etc.) run your workflows **predictably**, **traceably**, and **cost-efficiently**. It achieves this through a combination of structured flow control and stateful memory context.
 
+![botcircuits-agent-solution](docs/comparison.png)
+
 ```
 claude > "create an order fulfillment workflow with stock check, ship, and backorder branches"
 claude > "run order fulfillment"
@@ -12,9 +14,6 @@ Traditionally, AI agents are left to guess their next move, leading to unpredict
 
 ## Stateful memory context
 Complex tasks require perfect continuity. Argus automatically capture changes in memory states. Instead of forcing the AI to rely on a long, fragile context window, Argus provides the agent with exactly what is needed for the next immediate step. This keeps the agent entirely focused, boosting overall reliability while significantly lowering token costs.
-
-
-![botcircuits-agent-solution](docs/solution.png)
 
 ---
 
