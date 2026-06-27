@@ -1,11 +1,7 @@
 # BotCircuits Manager — Web
 
 The web UI for the BotCircuits Manager. Today it surfaces **workflow execution
-tracing** (per-session trace + memory-flow graph); workflow management/editing
-is a planned section (the sidebar already reserves its place).
-
-Built with **Next.js 14** (App Router), **Tailwind CSS**, and **ReactFlow** for
-the trace graph. Light/dark themes, BotCircuits lime-green brand.
+tracing** (per-session trace + memory-flow graph)
 
 ## Prerequisites
 
@@ -61,7 +57,3 @@ src/
 ```bash
 npm run build && npm start
 ```
-
-> Note: this is an internal admin console intended to run on a trusted network /
-> localhost. The pinned Next.js is the latest 14.2.x patch; remaining advisories
-> require a Next 15 major upgrade (a separate migration).
