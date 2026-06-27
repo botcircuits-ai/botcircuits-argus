@@ -3,7 +3,7 @@
 # BotCircuits Agent — one-line installer
 # ============================================================================
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/botcircuits-ai/botcircuits-agent/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/botcircuits-ai/botcircuits-argus/main/scripts/install.sh | bash
 #
 # Environment variables:
 #   BOTCIRCUITS_HOME   install location          (default: ~/.botcircuits/app)
@@ -183,26 +183,19 @@ fi
 
 # ── done ───────────────────────────────────────────────────────────────────
 echo
-echo "${BOLD}BotCircuits installed.${RST}"
+echo "${BOLD}BotCircuits-Argus installed.${RST}"
 echo
 echo "  Location: ${BOTCIRCUITS_HOME}"
 echo "  Version:  $(git -C "$BOTCIRCUITS_HOME" describe --tags --always --dirty 2>/dev/null || echo unknown)"
 echo
 echo "${BOLD}Next:${RST}"
-echo "  1. ${DIM}edit your API keys${RST}"
-echo "       \$EDITOR ${BOTCIRCUITS_HOME}/.env"
-echo
-echo "  2. ${DIM}run the CLI${RST} (open a new terminal first if PATH was just updated)"
-echo "       botcircuits"
-echo
-echo "  3. ${DIM}or the gateway / manager${RST}"
-echo "       botcircuits gateway serve"
+echo "  1. ${DIM}start the manager${RST}"
 echo "       botcircuits manager start"
 echo
-echo "  4. ${DIM}then, inside Claude Code or Hermes:${RST}"
+echo "  2. ${DIM}workflow skills are installed — inside Claude Code or Hermes:${RST}"
 echo "       \"create an order fulfillment workflow with ...\"   ${DIM}# author${RST}"
 echo "       \"run order fulfillment\"                            ${DIM}# run${RST}"
 echo
 echo "     ${DIM}(install skills into another agent later: botcircuits skills install --agent hermes)${RST}"
 echo
-echo "  Docs: https://github.com/botcircuits-ai/botcircuits-agent"
+echo "  Docs: https://github.com/botcircuits-ai/botcircuits-argus"
