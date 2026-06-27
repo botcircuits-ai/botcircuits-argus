@@ -41,7 +41,7 @@ Argus ships **two skills** your agent loads:
 
 Argus runs inside a host agent. Install the agent you want, then install Argus.
 
-### 1. Install a host agent (if you don't have one)
+### 1. Prerequisite : host agent
 
 Argus is driven by a host AI coding agent. Install whichever you prefer, for example:
 - **Claude Code**
@@ -66,7 +66,7 @@ botcircuits skills install [--agent claude|hermes] [--link]
 
 ### 4. Select the runtime (`settings.runtime`)
 
-Argus dispatches work to an **agent runtime** — the host that actually carries out the work, both when **authoring/building** a workflow and when **running** one. It resolves which runtime to use in this order (first hit wins). If no runtime set, default use **claude**:
+Argus dispatches work to an **agent runtime** — the host that actually carries out the work, both when **authoring/building** a workflow and when **running** one. It resolves which runtime to use in this order (first hit wins). If no runtime set, default use **claude-code**:
 
 1. The `BOTCIRCUITS_RUNTIME` environment variable.
 2. The `runtime` key in `.botcircuits/settings.json`.
@@ -116,14 +116,6 @@ When you build a workflow, **workflow-builder**:
 - **Compiles each natural-language `condition`** (e.g. `"all items are in stock"`) into a deterministic `choices[]` entry — a concrete rule the engine evaluates the same way every time, with no model interpretation at navigation time.
 - **Aggregates a `flow.variables` list** across all steps, so the engine knows exactly which variables the workflow reads and writes and can supply the agent only the context needed for the next step.
 - **Writes the runnable copy** to `.botcircuits/workflows/.build/<name>.json`.
-
-The authoring skill builds for you automatically. You can also build (or rebuild after a manual edit) explicitly:
-
-```bash
-botcircuits workflow build --name order_fulfillment
-```
-
-> **Always rebuild after editing the raw source.** The engine never reads your `*.json` source directly — only the `.build/` copy. Until you rebuild, your changes won't take effect at run time.
 
 #### Where files live
 
@@ -176,8 +168,6 @@ A workflow is one JSON file under `.botcircuits/workflows/`:
 - Step types are `start`, `agentAction`, and `question`. 
 - To branch, attach a `conditions` list at the **step root** (a sibling of `type` and `next`)
 
-## [Use cases](examples) 
-
 ## Argus Web Manager
 
 Use the BotCircuits Manager to author workflows, edit them via the visual Flow UI, and monitor execution traces.
@@ -197,11 +187,27 @@ botcircuits manager stop
 
 ---
 
-## Claude Code vs Claude Code + Argus — Comparison
+## [Use cases](examples)
 
-model: `claude-opus-4-8` · 3 use case(s)_
+| Example | What it does |
+|---|---|
+| [deep_research_assistant](examples/deep_research_assistant/TASK.md) | Produces a comprehensive research report on a topic. |
+| [ai_trends](examples/ai_trends/TASK.md) | workflow that checks current AI trends and summarizes them. |
+| [shipment_tracking](examples/shipment_tracking/TASK.md) | Checks the live status of many parcels at once via a carrier API. |
+| [lab_results_triage](examples/lab_results_triage/TASK.md) | Clinical lab-results triage against a lab/EHR API. |
+| [ci_pipeline_triage](examples/ci_pipeline_triage/TASK.md) | CI/CD pipeline failure triage, fully unattended. |
+| [code_review_gate](examples/code_review_gate/TASK.md) | Code review / PR merge gate decision workflow. |
+| [pr_merge_gate](examples/pr_merge_gate) | Decides whether a pull request is safe to merge. |
+| [deployment_release_gate](examples/deployment_release_gate/TASK.md) | DevOps release-gate decision workflow. |
+| [dependency_vulnerability_patrol](examples/dependency_vulnerability_patrol/TASK.md) | Dependency / CVE vulnerability-patrol workflow. |
+| [incident_postmortem_pipeline](examples/incident_postmortem_pipeline/TASK.md) | Production-incident postmortem triage pipeline. |
+| [test_suite_flakiness_triage](examples/test_suite_flakiness_triage/TASK.md) | Detects and quarantines flaky tests. |
 
-Two agents on the identical `claude` binary + model. **claude-code** free-runs the task from the prompt; **claude-code-argus** drives the built BotCircuits workflow through the deterministic engine (one `claude -p` call per branch segment).
+---
+
+## Benchmark
+
+model: `claude-opus-4-8` · 3 use case(s)
 
 ```
 Accuracy = per-item decisions vs the deterministic oracle. 
@@ -217,14 +223,23 @@ Usage is the agents' real reported usage.
 
 | | claude-code (bare) | claude-code + argus | Workflow advantage |
 |---|---|---|---|
-| Mean accuracy | 100% | 100% | +0 pts |
+| Mean accuracy | 100% | 100% | = |
 | Mean consistency | 1.00 | 1.00 | = |
 | Total tokens (sum) | 431,876 | 11,503 | 38× fewer |
 | Total cost (sum) | $1.1996 | $0.8602 | 1.4× cheaper |
 | Total latency (sum) | 260.8s | 182.1s | 1.4× faster |
-| Total LLM calls (sum) | 29 | 5 | 5.8× fewer |
 
 ### Per use case
+
+### [deep_research_assistant](examples/deep_research_assistant/TASK.md) 
+
+| Metric | claude-code | claude-code-argus | Δ |
+|---|---|---|---|
+| Accuracy | 100% | 100% | |
+| Consistency | 1.00 | 1.00 | |
+| Avg tokens | 191,114 | 5,807 | 33× |
+| Avg cost | $0.5652 | $0.0870 | 6.5× |
+| Avg latency | 146.0s | 76.4s | 1.9× |
 
 #### [shipment_tracking](examples/shipment_tracking/TASK.md) 
 
@@ -236,9 +251,7 @@ _Batch parcel-status classification (carrier API) · repeats: 3_
 | Consistency | 1.00 | 1.00 | |
 | Avg tokens | 186,560 | 2,499 | 75× |
 | Avg cost | $0.4873 | $0.1872 | 2.6× |
-| Avg LLM calls | 11 | 1 | |
 | Avg latency | 120.2s | 25.0s | 4.8× |
-| Run status | ok | ok | |
 
 #### [lab_results_triage](examples/lab_results_triage/TASK.md) 
 
@@ -250,9 +263,7 @@ _Per-order clinical triage (lab/EHR API) · repeats: 3_
 | Consistency | 1.00 | 1.00 | |
 | Avg tokens | 153,767 | 5,044 | 30× |
 | Avg cost | $0.3665 | $0.3774 | 1.0× |
-| Avg LLM calls | 10 | 3 | |
 | Avg latency | 76.9s | 77.6s | 1.0× |
-| Run status | ok | ok | |
 
 #### [ai_trends](examples/ai_trends/TASK.md) 
 
@@ -264,9 +275,7 @@ _Linear AI-trends summary (completion-graded) · repeats: 3_
 | Consistency | 1.00 | 1.00 | |
 | Avg tokens | 91,549 | 3,960 | 23× |
 | Avg cost | $0.3458 | $0.2956 | 1.2× |
-| Avg LLM calls | 8 | 1 | |
 | Avg latency | 63.7s | 79.5s | 0.8× |
-| Run status | ok | ok | |
 
 ---
 
