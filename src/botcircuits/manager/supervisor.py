@@ -53,9 +53,24 @@ def _state_path() -> Path:
 
 
 def _repo_root() -> Path:
-    """The project root (where ``manager_web/`` lives). The CLI runs from the
-    user's cwd; the frontend dir is resolved relative to it."""
-    return Path.cwd()
+    """The project root (where ``manager_web/`` lives).
+
+    Prefers the cwd if it has its own ``manager_web/`` (a source checkout the
+    user is intentionally running from), otherwise falls back to the
+    installed ``botcircuits`` package location (``src/botcircuits/`` sits two
+    levels below the repo root) — so ``botcircuits manager start`` also works
+    from an unrelated cwd.
+    """
+    cwd = Path.cwd()
+    if (cwd / "manager_web").is_dir():
+        return cwd
+
+    import botcircuits
+
+    pkg_root = Path(botcircuits.__file__).resolve().parent.parent.parent
+    if (pkg_root / "manager_web").is_dir():
+        return pkg_root
+    return cwd
 
 
 def _read_state() -> dict:
