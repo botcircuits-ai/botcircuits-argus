@@ -95,6 +95,30 @@ say "Installing dependencies (uv sync)"
 ( cd "$BOTCIRCUITS_HOME" && unset VIRTUAL_ENV && uv sync --quiet )
 ok "Dependencies installed"
 
+# ── step 4b: node/npm for the manager web frontend ────────────────────────
+if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    say "Installing Node.js via nvm (manager web UI needs npm)"
+    NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+    if [ ! -s "$NVM_DIR/nvm.sh" ]; then
+        curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash >/dev/null
+    fi
+    # shellcheck disable=SC1091
+    \. "$NVM_DIR/nvm.sh"
+    nvm install --lts >/dev/null
+    nvm use --lts >/dev/null
+    command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1 \
+        || die "node/npm install failed. Install Node.js manually and re-run."
+    ok "Node installed: $(node -v)"
+else
+    ok "Node present: $(node -v)"
+fi
+
+if [ -f "$BOTCIRCUITS_HOME/manager_web/package.json" ]; then
+    say "Installing manager web frontend deps (npm install)"
+    ( cd "$BOTCIRCUITS_HOME/manager_web" && npm install --quiet --no-fund --no-audit )
+    ok "Frontend dependencies installed"
+fi
+
 # ── step 5: .env scaffold ──────────────────────────────────────────────────
 if [ ! -f "$BOTCIRCUITS_HOME/.env" ] && [ -f "$BOTCIRCUITS_HOME/.env.example" ]; then
     cp "$BOTCIRCUITS_HOME/.env.example" "$BOTCIRCUITS_HOME/.env"
