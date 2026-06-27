@@ -35,7 +35,7 @@
      <code>claude-sonnet-4-6</code> · 1 use case(s)</p>
   <p class="lead">Both agents call the <strong>identical <code>claude</code>
      binary + model</strong>. <strong>claude-code</strong> free-runs the task
-     from the prompt; <strong>claude-code-botcircuits</strong> drives the built
+     from the prompt; <strong>claude-code-argus</strong> drives the built
      BotCircuits workflow through the deterministic engine — one
      <code>claude -p</code> call per branch segment. The comparison isolates the
      <em>method</em>, not the model.</p>
@@ -43,12 +43,11 @@
   <h2>Headline</h2>
   <div class="headline"><table>
     <thead><tr><th>Metric</th><th>claude-code (bare)</th>
-      <th class='skill'>claude-code-botcircuits</th><th>workflow advantage</th></tr></thead>
+      <th class='skill'>claude-code-argus</th><th>workflow advantage</th></tr></thead>
     <tbody><tr><th>Mean accuracy</th><td>100%</td><td class='skill'>100%</td><td class='adv'>+0 pts</td></tr>
 <tr><th>Total tokens</th><td>191,114</td><td class='skill'>5,807</td><td class='adv'>33× fewer</td></tr>
 <tr><th>Total cost</th><td>$0.5652</td><td class='skill'>$0.0870</td><td class='adv'>6.5× cheaper</td></tr>
-<tr><th>Total latency</th><td>146.0s</td><td class='skill'>76.4s</td><td class='adv'>1.9× faster</td></tr>
-<tr><th>Total LLM calls</th><td>9</td><td class='skill'>1</td><td class='adv'>9.0× fewer</td></tr></tbody>
+<tr><th>Total latency</th><td>146.0s</td><td class='skill'>76.4s</td><td class='adv'>1.9× faster</td></tr></tbody>
   </table></div>
   
 
@@ -59,12 +58,11 @@
       <p class="desc"> · repeats: 1</p>
       <table>
         <thead><tr><th>Metric</th><th>claude-code</th>
-          <th class='skill'>claude-code-botcircuits</th><th>advantage</th></tr></thead>
+          <th class='skill'>claude-code-argus</th><th>advantage</th></tr></thead>
         <tbody><tr><th>Accuracy</th><td>100%</td><td class='skill'>100%</td><td class='adv'></td></tr>
 <tr><th>Consistency</th><td>1.00</td><td class='skill'>1.00</td><td class='adv'></td></tr>
 <tr><th>Avg tokens</th><td>191,114</td><td class='skill'>5,807</td><td class='adv'>33×</td></tr>
 <tr><th>Avg cost</th><td>$0.5652</td><td class='skill'>$0.0870</td><td class='adv'>6.5×</td></tr>
-<tr><th>Avg LLM calls</th><td>9</td><td class='skill'>1</td><td class='adv'></td></tr>
 <tr><th>Avg latency</th><td>146.0s</td><td class='skill'>76.4s</td><td class='adv'>1.9×</td></tr></tbody>
       </table>
     </section>

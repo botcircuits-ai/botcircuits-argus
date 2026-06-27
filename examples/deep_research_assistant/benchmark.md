@@ -1,31 +1,29 @@
-# Claude Code vs Claude Code + BotCircuits — Comparison
+# Claude Code vs Claude Code + Argus — Comparison
 
-_Generated 2026-06-27 00:53 · model: `claude-sonnet-4-6` · 1 use case(s)_
+_Generated 2026-06-27 00:53 · 1 use case(s)_
 
-Two agents on the identical `claude` binary + model. **claude-code** free-runs the task from the prompt; **claude-code-botcircuits** drives the built BotCircuits workflow through the deterministic engine (one `claude -p` call per branch segment).
+Two agents on the identical `claude` binary + model. **claude-code** free-runs the task from the prompt; **claude-code-argus** drives the built BotCircuits workflow through the deterministic engine (one `claude -p` call per branch segment).
 
 ## Headline
 
-| | claude-code (bare) | claude-code-botcircuits | Workflow advantage |
+| | claude-code (bare) | claude-code-argus | Workflow advantage |
 |---|---|---|---|
 | Mean accuracy | 100% | 100% | +0 pts |
 | Mean consistency | 1.00 | 1.00 | = |
 | Total tokens (sum) | 191,114 | 5,807 | 33× fewer |
 | Total cost (sum) | $0.5652 | $0.0870 | 6.5× cheaper |
 | Total latency (sum) | 146.0s | 76.4s | 1.9× faster |
-| Total LLM calls (sum) | 9 | 1 | 9.0× fewer |
 
 ## Per use case
 
 ### deep_research_assistant
 
-| Metric | claude-code | claude-code-botcircuits | Δ |
+| Metric | claude-code | claude-code-argus | Δ |
 |---|---|---|---|
 | Accuracy | 100% | 100% | |
 | Consistency | 1.00 | 1.00 | |
 | Avg tokens | 191,114 | 5,807 | 33× |
 | Avg cost | $0.5652 | $0.0870 | 6.5× |
-| Avg LLM calls | 9 | 1 | |
 | Avg latency | 146.0s | 76.4s | 1.9× |
 | Run status | ok | ok | |
 
