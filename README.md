@@ -6,7 +6,7 @@
 
 ---
 
-An agent skill (Claude, Hermes, etc.) that runs your repetitive workflows **predictably**, **traceably**, and **cost-efficiently** — cutting **~90%** of tokens usage while keeping full accuracy.
+An agent skill (Claude, Hermes, etc.) that runs your repetitive workflows **predictably**, **traceably**, and **cost-efficiently** — cutting **~80%** of tokens usage while keeping full accuracy.
 
 ![botcircuits-agent-solution](docs/solution.png)
 
