@@ -44,6 +44,28 @@ _RUNTIME_TO_SKILLS_AGENT = {
     HERMES: "hermes",
 }
 
+#: Local project-level config folder per agent (sibling of `.botcircuits/`).
+#: When present under the init target dir, skills install there instead of
+#: the user-level `~/.claude/skills` or `~/.hermes/skills` default.
+_AGENT_LOCAL_DIR = {
+    "claude": ".claude",
+    "hermes": ".hermes",
+}
+
+
+def _local_skills_target(base: Path, agent: str) -> Path | None:
+    """`<base>/.claude` or `<base>/.hermes`, if that folder already exists.
+
+    Lets a project that's already set up a local agent config folder get its
+    skills installed alongside it, instead of always falling back to the
+    user-level skills dir.
+    """
+    local_dir = _AGENT_LOCAL_DIR.get(agent)
+    if local_dir is None:
+        return None
+    candidate = base / local_dir
+    return (candidate / "skills") if candidate.is_dir() else None
+
 
 def add_init_subparser(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser(
@@ -101,5 +123,9 @@ def run_init_command(args: argparse.Namespace) -> int:
         return 0
 
     out("")
-    skills_args = argparse.Namespace(target=None, agent=agent, link=args.link)
+    local_target = _local_skills_target(base, agent)
+    skills_args = argparse.Namespace(
+        target=str(local_target) if local_target else None,
+        agent=agent, link=args.link,
+    )
     return _cmd_install(skills_args)
