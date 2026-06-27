@@ -53,9 +53,24 @@ Argus is driven by a host AI coding agent. Install whichever you prefer, for exa
 curl -fsSL https://raw.githubusercontent.com/botcircuits-ai/botcircuits-argus/main/scripts/install.sh | bash
 ```
 
-### 3. Install the skills
+### 3. Initialize project settings
 
-Install the workflow skills into your host agent (defaults to `~/.claude/skills`):
+Create an initial `.botcircuits/settings.json` in the folder you want to run Argus from. This also installs the workflow skills for the selected runtime's host agent (defaults to `~/.claude/skills`):
+
+```bash
+botcircuits init
+botcircuits init --dir <path>               # or target another folder
+botcircuits init --runtime <host-agent>      # set settings.runtime + install its skills
+```
+
+- `--runtime` — seed `settings.runtime` with a currently supported host agent runtime: `claude-code`, `hermes`. Default use **claude-code**. Also installs that runtime's workflow skills.
+- `--link` — symlink the skills instead of copying, so updates to Argus are picked up automatically.
+
+Argus dispatches work to an **agent runtime** — the host that actually carries out the work, both when **authoring/building** a workflow and when **running** one.
+
+### 4. Install the skills (optional)
+
+`botcircuits init --runtime <host-agent>` already installs the skills for that runtime. Use this directly if you want to (re)install into another agent, or without touching `settings.json`:
 
 ```bash
 botcircuits skills install [--agent claude|hermes] [--link]
@@ -64,19 +79,7 @@ botcircuits skills install [--agent claude|hermes] [--link]
 - `--agent` — target host agent (default: `claude`).
 - `--link` — symlink the skills instead of copying, so updates to Argus are picked up automatically.
 
-### 4. Select the runtime (`settings.runtime`)
-
-Argus dispatches work to an **agent runtime** — the host that actually carries out the work, both when **authoring/building** a workflow and when **running** one. It resolves which runtime to use in this order (first hit wins). If no runtime set, default use **claude-code**:
-
-1. The `BOTCIRCUITS_RUNTIME` environment variable.
-2. The `runtime` key in `.botcircuits/settings.json`.
-Supported values: `claude-code`, `codex`, `openclaw`, `hermes`.
-
-```json
-{
-  "runtime": "hermes"
-}
-```
+### 5. Override the runtime command (optional)
 
 If a host's CLI isn't on your `PATH`, or it needs different flags, override its launch command (and optionally `timeout` / `cwd`) under `runtimes`:
 

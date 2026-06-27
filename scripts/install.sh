@@ -157,24 +157,6 @@ if [ -z "${TERMUX_VERSION:-}" ]; then
     fi
 fi
 
-# ── step 7: install workflow skills into host agents (best-effort) ──────────
-# So the user can immediately drive workflows from natural language inside
-# Claude Code / Hermes right after install. Done via the CLI itself
-# (`botcircuits skills install`) — into whichever agent dirs already exist.
-say "Installing workflow skills into available host agents"
-BC="$VENV_BIN/botcircuits"
-installed_any=""
-if [ -d "$HOME/.claude" ]; then
-    ( unset PYTHONPATH PYTHONHOME; "$BC" skills install --agent claude ) \
-        >/dev/null 2>&1 && { ok "Skills → ~/.claude/skills (Claude Code)"; installed_any=1; }
-fi
-if [ -d "$HOME/.hermes" ]; then
-    ( unset PYTHONPATH PYTHONHOME; "$BC" skills install --agent hermes ) \
-        >/dev/null 2>&1 && { ok "Skills → ~/.hermes/skills (Hermes)"; installed_any=1; }
-fi
-[ -n "$installed_any" ] || \
-    warn "No Claude/Hermes dir found — run 'botcircuits skills install' later."
-
 # ── done ───────────────────────────────────────────────────────────────────
 echo
 echo "${BOLD}BotCircuits-Argus installed.${RST}"
@@ -186,7 +168,11 @@ echo "${BOLD}Next:${RST}"
 echo "  1. ${DIM}start the manager${RST}"
 echo "       botcircuits manager start"
 echo
-echo "  2. ${DIM}workflow skills are installed — inside Claude Code or Hermes:${RST}"
+echo "  2. ${DIM}initialize project settings (in the folder you want to run from)${RST}"
+echo "       botcircuits init --runtime claude-code   ${DIM}# also installs that runtime's skills${RST}"
+echo "       botcircuits init --dir <path> --runtime hermes   ${DIM}# or target another folder/runtime${RST}"
+echo
+echo "  3. ${DIM}then, inside Claude Code or Hermes:${RST}"
 echo "       \"create an order fulfillment workflow with ...\"   ${DIM}# author${RST}"
 echo "       \"run order fulfillment\"                            ${DIM}# run${RST}"
 echo

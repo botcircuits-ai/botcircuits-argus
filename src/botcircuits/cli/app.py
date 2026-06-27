@@ -53,6 +53,7 @@ from botcircuits.cli.commands_mcp import add_mcp_subparser, run_mcp_command
 from botcircuits.cli.commands_manager import add_manager_subparser, run_manager_command
 from botcircuits.cli.commands_gateway import add_gateway_subparser, run_gateway_command
 from botcircuits.cli.commands_skills import add_skills_subparser, run_skills_command
+from botcircuits.cli.commands_init import add_init_subparser, run_init_command
 from botcircuits.cli.commands_workflow import add_workflow_subparser, run_workflow_command
 from botcircuits.cli.config import CLIConfig, ConfigError, resolve
 from botcircuits.cli.render import run_blocking, run_streaming
@@ -127,6 +128,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_gateway_subparser(sub)
     add_skills_subparser(sub)
     add_setup_subparser(sub)
+    add_init_subparser(sub)
     return p
 
 
@@ -367,6 +369,8 @@ def main() -> None:
             rc = run_skills_command(args)
         elif args.subcommand == "setup":
             rc = run_setup_wizard(args)
+        elif args.subcommand == "init":
+            rc = run_init_command(args)
         else:
             rc = asyncio.run(amain(args))
     except KeyboardInterrupt:
