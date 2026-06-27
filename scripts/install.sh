@@ -165,8 +165,6 @@ echo "  Location: ${BOTCIRCUITS_HOME}"
 echo "  Version:  $(git -C "$BOTCIRCUITS_HOME" describe --tags --always --dirty 2>/dev/null || echo unknown)"
 echo
 echo "${BOLD}Next:${RST}"
-echo "  1. ${DIM}start the manager${RST}"
-echo "       botcircuits manager start"
 echo
 echo "  2. ${DIM}initialize project settings (in the folder you want to run from)${RST}"
 echo "       botcircuits init --runtime <agent> ${DIM}# runtime: claude-code, hermes. also installs that runtime's skills${RST}"
@@ -175,6 +173,9 @@ echo
 echo "  3. ${DIM}then, inside Claude Code or Hermes:${RST}"
 echo "       \"create an order fulfillment workflow with ...\"   ${DIM}# author${RST}"
 echo "       \"run order fulfillment\"                            ${DIM}# run${RST}"
+echo
+echo "  1. ${DIM}start the manager${RST}"
+echo "       botcircuits manager start" # optional
 echo
 echo "     ${DIM}(install skills into another agent later: botcircuits skills install --agent hermes)${RST}"
 echo
