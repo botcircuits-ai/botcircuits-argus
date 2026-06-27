@@ -62,36 +62,30 @@ fi
 # the checkout, then auto-installs a matching interpreter during `uv sync`.
 # No explicit `uv python install` step needed.
 
-# ── step 3: clone or update ────────────────────────────────────────────────
+# ── step 3: fresh clone ────────────────────────────────────────────────────
+# Re-running always wipes and re-clones rather than fetch+pull, so the
+# installed copy can never drift from a stale/partial previous install.
 mkdir -p "$(dirname "$BOTCIRCUITS_HOME")"
 
 if [ -d "$BOTCIRCUITS_HOME/.git" ]; then
-    say "Updating existing checkout at ${BOTCIRCUITS_HOME}"
-    # Don't blow away the user's work — let them resolve it.
     if ! git -C "$BOTCIRCUITS_HOME" diff --quiet || \
        ! git -C "$BOTCIRCUITS_HOME" diff --cached --quiet; then
-        warn "${BOTCIRCUITS_HOME} has uncommitted changes."
-        warn "Commit, stash, or move the checkout aside before re-running."
-        die "Refusing to overwrite local modifications."
+        warn "${BOTCIRCUITS_HOME} has uncommitted changes — they will be deleted."
+        git -C "$BOTCIRCUITS_HOME" status --short | sed 's/^/    /' >&2
     fi
-    git -C "$BOTCIRCUITS_HOME" fetch --tags origin
-    git -C "$BOTCIRCUITS_HOME" checkout --quiet "${BOTCIRCUITS_REF}"
-    # Fast-forward only when on a branch; tags/SHAs are detached and don't pull.
-    if git -C "$BOTCIRCUITS_HOME" symbolic-ref -q HEAD >/dev/null; then
-        git -C "$BOTCIRCUITS_HOME" pull --ff-only origin "${BOTCIRCUITS_REF}"
-    fi
-    ok "Checkout updated to ${BOTCIRCUITS_REF}"
+    say "Removing existing checkout at ${BOTCIRCUITS_HOME}"
+    rm -rf "$BOTCIRCUITS_HOME"
 elif [ -e "$BOTCIRCUITS_HOME" ]; then
     die "${BOTCIRCUITS_HOME} exists but isn't a git checkout. Move it aside or set BOTCIRCUITS_HOME=<other path>."
-else
-    say "Cloning ${BOTCIRCUITS_REPO} → ${BOTCIRCUITS_HOME}"
-    git clone --quiet --branch "${BOTCIRCUITS_REF}" "${BOTCIRCUITS_REPO}" "${BOTCIRCUITS_HOME}" \
-        || git clone --quiet "${BOTCIRCUITS_REPO}" "${BOTCIRCUITS_HOME}"
-    # Second clone (without --branch) catches the case where REF is a tag/SHA
-    # that --branch doesn't accept; check it out explicitly.
-    git -C "$BOTCIRCUITS_HOME" checkout --quiet "${BOTCIRCUITS_REF}" 2>/dev/null || true
-    ok "Cloned at $(git -C "$BOTCIRCUITS_HOME" rev-parse --short HEAD)"
 fi
+
+say "Cloning ${BOTCIRCUITS_REPO} → ${BOTCIRCUITS_HOME}"
+git clone --quiet --branch "${BOTCIRCUITS_REF}" "${BOTCIRCUITS_REPO}" "${BOTCIRCUITS_HOME}" \
+    || git clone --quiet "${BOTCIRCUITS_REPO}" "${BOTCIRCUITS_HOME}"
+# Second clone (without --branch) catches the case where REF is a tag/SHA
+# that --branch doesn't accept; check it out explicitly.
+git -C "$BOTCIRCUITS_HOME" checkout --quiet "${BOTCIRCUITS_REF}" 2>/dev/null || true
+ok "Cloned at $(git -C "$BOTCIRCUITS_HOME" rev-parse --short HEAD)"
 
 # ── step 4: dependencies ───────────────────────────────────────────────────
 say "Installing dependencies (uv sync)"
