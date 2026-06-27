@@ -1,0 +1,51 @@
+{
+  "name": "deep_research_assistant",
+  "description": "Research a given topic on the open web, synthesize a structured multi-section report, and save it to a dated markdown file. Unattended; never asks the user anything.",
+  "flow": {
+    "start": "start",
+    "variables": [
+      {
+        "variableName": "topic",
+        "description": "The topic to research."
+      },
+      {
+        "variableName": "research_depth",
+        "description": "Desired depth/length of the report, e.g. 'Standard - 3-5 pages'."
+      },
+      {
+        "variableName": "research_findings",
+        "description": "Raw research collected on the topic: findings, key statistics, recent developments, stakeholder perspectives, and source URLs."
+      },
+      {
+        "variableName": "research_report",
+        "description": "The final structured report synthesized from research_findings, written to the dated results file."
+      }
+    ],
+    "steps": {
+      "start": {
+        "type": "start",
+        "next": "research_topic"
+      },
+      "research_topic": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Using the `topic` and `research_depth` variables, search the web for comprehensive, current information on the topic. Collect findings, key statistics, recent developments, different stakeholder perspectives, and source URLs into the `research_findings` slot."
+        },
+        "next": "synthesize_report"
+      },
+      "synthesize_report": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Using `research_findings`, build a structured report into the `research_report` slot with these sections: Executive Summary (3-5 key findings, bottom line conclusion, recommended action), Background & Context, Current State, Key Findings (with supporting evidence), Different Perspectives (areas of consensus/debate), Implications (risks/opportunities), Recommended Actions (prioritized next steps), Sources (with reliability rating and any gaps noted), and Questions for Further Research."
+        },
+        "next": "save_results"
+      },
+      "save_results": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Write the contents of `research_report` to a markdown file named `deep_research_assistant_<timestamp>.md` in the current working directory, where <timestamp> is the current date/time. Do not ask any questions; this is an unattended run."
+        }
+      }
+    }
+  }
+}

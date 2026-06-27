@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Claude Code vs Claude Code + BotCircuits</title>
+<style>
+  :root { --skill:#0b7285; --bg:#0d1117; --card:#161b22; --fg:#e6edf3;
+           --muted:#8b949e; --line:#30363d; --adv:#3fb950; }
+  * { box-sizing:border-box; }
+  body { font:15px/1.55 -apple-system,Segoe UI,Roboto,sans-serif;
+          margin:0; background:var(--bg); color:var(--fg); }
+  .wrap { max-width:960px; margin:0 auto; padding:40px 24px 80px; }
+  h1 { font-size:26px; margin:0 0 6px; }
+  h3 { margin:0 0 2px; font-size:18px; }
+  .meta { color:var(--muted); margin:0 0 28px; }
+  .lead { color:var(--fg); background:var(--card); border:1px solid var(--line);
+           border-radius:10px; padding:16px 18px; margin:0 0 28px; }
+  table { width:100%; border-collapse:collapse; background:var(--card);
+           border:1px solid var(--line); border-radius:10px; overflow:hidden;
+           margin:0 0 22px; }
+  th,td { text-align:right; padding:10px 14px; border-bottom:1px solid var(--line); }
+  thead th { color:var(--muted); font-weight:600; }
+  tbody th { text-align:left; color:var(--fg); font-weight:500; }
+  td.skill, th.skill { color:#7ee0ef; }
+  td.adv { color:var(--adv); font-weight:600; }
+  tr:last-child td, tr:last-child th { border-bottom:none; }
+  .headline table th:first-child { width:38%; }
+  section { margin:0 0 6px; }
+  .desc { color:var(--muted); margin:0 0 8px; font-size:13px; }
+  tr.tot th, tr.tot td { font-weight:700; border-top:2px solid var(--line); }
+  footer { color:var(--muted); font-size:13px; margin-top:24px;
+            border-top:1px solid var(--line); padding-top:16px; }
+</style></head>
+<body><div class="wrap">
+  <h1>Claude Code vs Claude Code + BotCircuits</h1>
+  <p class="meta">Generated 2026-06-27 00:53 · model
+     <code>claude-sonnet-4-6</code> · 1 use case(s)</p>
+  <p class="lead">Both agents call the <strong>identical <code>claude</code>
+     binary + model</strong>. <strong>claude-code</strong> free-runs the task
+     from the prompt; <strong>claude-code-botcircuits</strong> drives the built
+     BotCircuits workflow through the deterministic engine — one
+     <code>claude -p</code> call per branch segment. The comparison isolates the
+     <em>method</em>, not the model.</p>
+
+  <h2>Headline</h2>
+  <div class="headline"><table>
+    <thead><tr><th>Metric</th><th>claude-code (bare)</th>
+      <th class='skill'>claude-code-botcircuits</th><th>workflow advantage</th></tr></thead>
+    <tbody><tr><th>Mean accuracy</th><td>100%</td><td class='skill'>100%</td><td class='adv'>+0 pts</td></tr>
+<tr><th>Total tokens</th><td>191,114</td><td class='skill'>5,807</td><td class='adv'>33× fewer</td></tr>
+<tr><th>Total cost</th><td>$0.5652</td><td class='skill'>$0.0870</td><td class='adv'>6.5× cheaper</td></tr>
+<tr><th>Total latency</th><td>146.0s</td><td class='skill'>76.4s</td><td class='adv'>1.9× faster</td></tr>
+<tr><th>Total LLM calls</th><td>9</td><td class='skill'>1</td><td class='adv'>9.0× fewer</td></tr></tbody>
+  </table></div>
+  
+
+  <h2>Per use case</h2>
+  
+    <section>
+      <h3>deep_research_assistant</h3>
+      <p class="desc"> · repeats: 1</p>
+      <table>
+        <thead><tr><th>Metric</th><th>claude-code</th>
+          <th class='skill'>claude-code-botcircuits</th><th>advantage</th></tr></thead>
+        <tbody><tr><th>Accuracy</th><td>100%</td><td class='skill'>100%</td><td class='adv'></td></tr>
+<tr><th>Consistency</th><td>1.00</td><td class='skill'>1.00</td><td class='adv'></td></tr>
+<tr><th>Avg tokens</th><td>191,114</td><td class='skill'>5,807</td><td class='adv'>33×</td></tr>
+<tr><th>Avg cost</th><td>$0.5652</td><td class='skill'>$0.0870</td><td class='adv'>6.5×</td></tr>
+<tr><th>Avg LLM calls</th><td>9</td><td class='skill'>1</td><td class='adv'></td></tr>
+<tr><th>Avg latency</th><td>146.0s</td><td class='skill'>76.4s</td><td class='adv'>1.9×</td></tr></tbody>
+      </table>
+    </section>
+
+  <footer>Accuracy = per-item decisions vs the deterministic oracle (replays the
+    same mock API the agents hit). Consistency = fraction of repeats agreeing on
+    the modal answer. Tokens / cost / latency are per-run averages from the
+    agents' real reported usage; “advantage” is the bare ÷ workflow ratio.</footer>
+</div></body></html>
