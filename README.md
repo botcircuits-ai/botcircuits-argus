@@ -10,13 +10,13 @@ An agent skill (Claude, Hermes, etc.) that runs your repetitive workflows **pred
 
 ![botcircuits-agent-solution](docs/solution.png)
 
-```
-╭──────────────────────────────────────────────╮
-│  TOKENS SAVED        ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓  80%  │
-│  ACCURACY HELD       ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 100%  │
-│  RUN LATENCY         ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 1.4×  │
-╰──────────────────────────────────────────────╯
-```
+<p align="center">
+  <img alt="Tokens Saved" src="https://img.shields.io/badge/Tokens_Saved-97%25-brightgreen?style=for-the-badge">
+  <img alt="Consistency" src="https://img.shields.io/badge/Consistency-1.00-brightgreen?style=for-the-badge">
+  <img alt="Decision Accuracy" src="https://img.shields.io/badge/Decision_Accuracy-100%25-brightgreen?style=for-the-badge">
+  <img alt="Run Latency" src="https://img.shields.io/badge/Run_Latency-1.4x_faster-blue?style=for-the-badge">
+</p>
+<p align="center"><sub>measured across 4 use cases · see <a href="#benchmark">Benchmark</a></sub></p>
 
 
 Why let your LLM agent reason through every routing decision — even when the path is repetitive and predictable?
