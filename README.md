@@ -20,7 +20,7 @@ An agent skill (Claude, Hermes, etc.) that runs your repetitive workflows **pred
 
 
 ## Structured flow control 
-**Replace guesswork with deterministic workflows**. Argus controls navigation, ensuring AI agents follow secure, approved, and repeatable execution paths instead of reasoning through every step.
+**Replace guesswork with deterministic workflows**. Argus controls navigation, ensuring AI agents follow approved, and repeatable execution paths instead of reasoning through every step.
 
 ## Stateful memory context
 **Provide only the context that matters**. Argus tracks state changes and supplies the agent with the exact memory needed for the current step, improving reliability while reducing token usage.
