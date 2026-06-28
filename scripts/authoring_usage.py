@@ -56,13 +56,13 @@ def main(argv: list[str] | None = None) -> int:
 
     from botcircuits.agent.workflow.generator import generate_workflow
     from botcircuits.runtime.detect import (
-        NATIVE, detect_runtime_name, runtime_config,
+        BOTCIRCUITS, detect_runtime_name, runtime_config,
     )
     from botcircuits.runtime.cli_llm_provider import CliLLMProvider
     from botcircuits.usage.run_usage import usage_from_stdout
 
     rt = detect_runtime_name(settings=None)
-    if rt == NATIVE:
+    if rt == BOTCIRCUITS:
         print(json.dumps({"error": "no host CLI runtime detected (need claude-code)"}))
         return 1
     provider = CliLLMProvider(runtime_config(rt, settings=None))

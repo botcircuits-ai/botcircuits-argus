@@ -8,8 +8,8 @@ Resolution order (first hit wins):
   2. **Auto-detect** — environment markers the host CLI sets (claude-code
      exports `CLAUDECODE` / `CLAUDE_CODE_*`; codex `CODEX_*`; …), then a
      `which` probe for a known CLI binary on PATH.
-  3. **Default** — `native`, the in-process loop. Keeps today's behavior when
-     nothing else matches.
+  3. **Default** — `botcircuits`, the native in-process agent loop. Keeps
+     today's behavior when nothing else matches.
 
 The per-provider argv TEMPLATE (and default binary name) lives in
 `_REGISTRY` below so adding a CLI provider that emits the same JSON contract
@@ -26,7 +26,7 @@ from typing import Callable
 from botcircuits.runtime.base import AgentRuntimeProvider, RuntimeConfig
 
 
-NATIVE = "native"
+BOTCIRCUITS = "botcircuits"
 SELF = "self"
 CLAUDE_CODE = "claude-code"
 CODEX = "codex"
@@ -50,7 +50,7 @@ class _RuntimeSpec:
 
 
 _REGISTRY: dict[str, _RuntimeSpec] = {
-    NATIVE: _RuntimeSpec(NATIVE, (), "", ()),
+    BOTCIRCUITS: _RuntimeSpec(BOTCIRCUITS, (), "", ()),
     # The inline/self runtime needs no binary or argv — the host agent performs
     # segments in-session via the step driver. Selected explicitly (the
     # workflow-running skill drives it), never auto-probed.
@@ -98,10 +98,11 @@ _REGISTRY: dict[str, _RuntimeSpec] = {
     ),
 }
 
-#: Order auto-detection probes runtimes in. Native is the implicit default,
-#: not probed. Hermes is probed last: claude-code/codex/openclaw set definitive
-#: env markers, while hermes leans on the binary probe, so it shouldn't shadow
-#: a host that announced itself explicitly.
+#: Order auto-detection probes runtimes in. `botcircuits` (the native
+#: in-process agent) is the implicit default, not probed. Hermes is probed
+#: last: claude-code/codex/openclaw set definitive env markers, while hermes
+#: leans on the binary probe, so it shouldn't shadow a host that announced
+#: itself explicitly.
 _DETECT_ORDER = (CLAUDE_CODE, CODEX, OPENCLAW, HERMES)
 
 
@@ -142,7 +143,7 @@ def detect_runtime_name(settings: dict | None = None) -> str:
             return name
 
     # 3. Default.
-    return NATIVE
+    return BOTCIRCUITS
 
 
 def runtime_config(name: str, settings: dict | None = None) -> RuntimeConfig:
@@ -186,18 +187,18 @@ def select_runtime(
     """Instantiate the selected runtime provider.
 
     `name` forces a specific provider (skips detection). `native_factory`
-    builds the native provider lazily — it wraps a live `Agent`, which the
-    caller owns, so this module never constructs one itself. When the
-    selected runtime is `native` but no factory is supplied, that's a
-    configuration error the caller must handle.
+    builds the native (`botcircuits`) provider lazily — it wraps a live
+    `Agent`, which the caller owns, so this module never constructs one
+    itself. When the selected runtime is `botcircuits` but no factory is
+    supplied, that's a configuration error the caller must handle.
     """
     chosen = (name or detect_runtime_name(settings)).lower()
     config = runtime_config(chosen, settings)
 
-    if chosen == NATIVE:
+    if chosen == BOTCIRCUITS:
         if native_factory is None:
             raise ValueError(
-                "native runtime selected but no native_factory provided; "
+                "botcircuits runtime selected but no native_factory provided; "
                 "the native provider wraps an Agent the caller must build."
             )
         return native_factory()
@@ -226,14 +227,15 @@ def select_runtime(
         # config (same JSON contract) until they need a bespoke parser.
         return ClaudeCodeRuntime(config)
 
-    # Unknown explicit name: fall back to native if we can, else error.
+    # Unknown explicit name: fall back to the native botcircuits runtime if
+    # we can, else error.
     if native_factory is not None:
         return native_factory()
     raise ValueError(f"unknown runtime {chosen!r} and no native fallback available")
 
 
 __all__ = [
-    "NATIVE",
+    "BOTCIRCUITS",
     "SELF",
     "CLAUDE_CODE",
     "CODEX",

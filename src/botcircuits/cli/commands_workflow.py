@@ -396,14 +396,14 @@ def _make_build_provider(cfg):
     Returns `(provider, label)`; `label` goes in the build log.
     """
     from .app import make_provider
-    from botcircuits.runtime.detect import NATIVE, detect_runtime_name
+    from botcircuits.runtime.detect import BOTCIRCUITS, detect_runtime_name
     from botcircuits.runtime.cli_llm_provider import CliLLMProvider
 
     # Mirror run_workflow's detection (env markers + PATH probe; the
-    # $BOTCIRCUITS_RUNTIME override still wins). `native` here means "no host
-    # CLI" — fall through to the direct provider rather than failing.
+    # $BOTCIRCUITS_RUNTIME override still wins). `botcircuits` here means "no
+    # host CLI" — fall through to the direct provider rather than failing.
     runtime_name = detect_runtime_name(settings=None)
-    if runtime_name != NATIVE:
+    if runtime_name != BOTCIRCUITS:
         from botcircuits.runtime.detect import runtime_config
         config = runtime_config(runtime_name, settings=None)
         return CliLLMProvider(config), f"runtime={runtime_name}"

@@ -18,6 +18,7 @@ import asyncio
 import json
 from pathlib import Path
 from typing import AsyncIterator, Literal
+from uuid import uuid4
 
 from botcircuits.providers.base import LLMProvider
 from botcircuits.types import LLMResponse, Message, StreamEvent, ToolCall
@@ -54,10 +55,10 @@ _MAX_SEGMENT_TURNS = 25
 
 MAX_AGENT_STEPS = 500
 
-# Synthetic id prefix for the workflow tool calls the loop injects to
-# advance an active workflow after the model stops acting. Lets us tell
-# loop-injected calls apart from model-issued ones in history if needed.
-_AUTO_RECALL_ID_PREFIX = "wf-autorecall-"
+# Synthetic id prefix for the workflow tool call the loop injects to resume
+# a paused workflow on the user's next message. Lets us tell loop-injected
+# calls apart from model-issued ones in history if needed.
+_AUTO_RESUME_ID_PREFIX = "wf-autoresume-"
 
 # Truncation cap on the last-assistant-message we hand to tools via context.
 # Variable normalization (the workflow tool's main consumer of this field)
@@ -99,65 +100,6 @@ def _last_user_text(messages: list[Message]) -> str:
                     return text[:_CONTEXT_LAST_ASSISTANT_CHARS] + "…"
                 return text
     return ""
-
-
-def _available_workflow_tools(reg: ToolRegistry) -> list[tuple[str, str]]:
-    """Return (name, description) for every workflow tool on `reg`.
-
-    Workflow tools are tagged with `_workflow_state` by `workflow_tool()`,
-    which is how we tell them apart from built-ins and MCP tools.
-    """
-    out: list[tuple[str, str]] = []
-    for tool in reg.all():
-        if getattr(tool, "_workflow_state", None) is None:
-            continue
-        out.append((tool.name, tool.description or ""))
-    return out
-
-
-def _with_workflow_reminder(system: str | None, reg: ToolRegistry) -> str | None:
-    """Append a workflow-related reminder to `system`.
-
-    In engine-driven mode the ENGINE owns the loop once a workflow starts,
-    so the only reminders that matter are about *triggering* and *resuming*:
-
-      - A workflow is paused waiting on the user (its `session_id` is set
-        during an engine user-interaction pause): the user's latest message
-        is the answer — re-call the workflow tool so the engine resumes.
-      - No workflow is active but workflow tools exist: calling the matching
-        tool MUST be the first action when the user's request matches one —
-        don't ask clarifying questions in prose first; the workflow drives
-        the conversation itself.
-    """
-    names = active_workflow_names(reg)
-    if names:
-        name = names[0]
-        reminder = (
-            f"\n\n[Active workflow] The workflow '{name}' is paused waiting "
-            f"for the user's reply. Treat the user's latest message as that "
-            f"answer and call '{name}' again to resume the workflow."
-        )
-        return (system or "") + reminder
-
-    available = _available_workflow_tools(reg)
-    if not available:
-        return system
-    lines = [f"  - '{n}': {d}" for n, d in available]
-    reminder = (
-        "\n\n[Available workflows] The following workflow tools are "
-        "registered:\n"
-        + "\n".join(lines)
-        + "\n\nCalling the matching workflow tool is MANDATORY and MUST be "
-        "your VERY FIRST action whenever the user's request matches one of "
-        "the workflows above. Do NOT ask clarifying questions in prose "
-        "first — the workflow itself drives the conversation (its first "
-        "step may ask the user for inputs). Call the tool with empty args "
-        "`{}` to begin; the tool will return the next step to perform. "
-        "Do not imitate earlier turns where you appeared to ask a question "
-        "directly — that question came from the workflow tool's output, "
-        "not from you skipping the call."
-    )
-    return (system or "") + reminder
 
 
 def _fired_workflow_tool(reg: ToolRegistry, tool_calls: list[ToolCall]) -> bool:
@@ -246,8 +188,7 @@ class Agent:
         #     a visible reasoning trace, at the cost of parse brittleness.
         self.mode = mode
         # When False, workflow tools registered on the registry are
-        # hidden from the provider call and the workflow-related
-        # system-prompt reminder is suppressed. The tools stay in the
+        # hidden from the provider call entirely. The tools stay in the
         # registry (so other code can still inspect them) — only the
         # surface exposed to the LLM changes. Default True keeps the
         # existing behavior for every caller that doesn't ask
@@ -340,7 +281,7 @@ class Agent:
         the model sees changes.
 
         In ReAct mode this returns [] — tools are described in the
-        system prompt instead (see `_react_tools` / `_system_with_reminder`),
+        system prompt instead (see `_react_tools` / `_system_for_call`),
         so the provider gets no structured tool spec.
         """
         if self.mode == "react":
@@ -357,17 +298,18 @@ class Agent:
         return [t for t in all_tools
                 if getattr(t, "_workflow_state", None) is None]
 
-    def _system_with_reminder(self, system: str | None) -> str | None:
+    def _system_for_call(self, system: str | None) -> str | None:
         """System prompt with mode-specific blocks attached.
 
-        Native mode appends the workflow reminder (unless workflows are
-        disabled). ReAct mode additionally appends the tool preamble that
-        teaches the Thought/Action/Action Input format — without it the
-        model has no way to know which tools exist, since they never reach
-        the provider's tool API.
+        ReAct mode appends the tool preamble that teaches the
+        Thought/Action/Action Input format — without it the model has no
+        way to know which tools exist, since they never reach the
+        provider's tool API. Native mode returns `system` unchanged:
+        workflow tools are presented like any other tool (name +
+        description), and an already-paused workflow is resumed directly
+        by the loop (see `_resume_active_workflow`), not via a prompt
+        reminder telling the model to re-call it.
         """
-        if self.enable_workflows:
-            system = _with_workflow_reminder(system, self.tools)
         if self.mode == "react":
             preamble = render_react_preamble(self._react_tools())
             if preamble:
@@ -626,6 +568,56 @@ class Agent:
         except Exception as e:  # pragma: no cover - defensive
             return f"{type(e).__name__}: {e}", True
 
+    # -- workflow resume ----------------------------------------------------
+
+    async def _resume_active_workflow(
+        self,
+        convo,
+        *,
+        event_sink=None,
+    ) -> tuple[ToolCall, str, bool] | None:
+        """If a workflow is paused waiting on the user, resume it directly —
+        no provider call, no model decision involved.
+
+        `active_workflow_names` is non-empty only between an engine
+        user-interaction pause and its resolution (see `workflow_tool`'s
+        `_run_engine`), so by construction the just-appended user message IS
+        the answer to that pause. Resuming is therefore deterministic: call
+        the SAME tool handler the model would have called, with the SAME
+        `run_segment` callback, but trigger it from the loop itself instead
+        of waiting for (and prompting for) a model tool-call decision.
+
+        Returns `(tool_call, output, is_error)` for the synthetic call so
+        callers can append it to history / stream it like any other tool
+        round, or `None` when no workflow is paused.
+        """
+        from botcircuits.agent.workflow import active_workflow_names
+
+        if not self.enable_workflows:
+            return None
+        names = active_workflow_names(self.tools)
+        if not names:
+            return None
+        name = names[0]
+
+        tc = ToolCall(id=f"{_AUTO_RESUME_ID_PREFIX}{uuid4().hex[:8]}",
+                      name=name, arguments={})
+        tool_context = {
+            "last_assistant_message": _last_assistant_text(convo.messages),
+            "last_user_message": _last_user_text(convo.messages),
+            "session_id": convo.session_id,
+            "run_segment": self._make_segment_runner(event_sink=event_sink),
+            "event_sink": event_sink,
+        }
+        out, err = await self.tools.run(tc.name, tc.arguments, tool_context)
+
+        convo.messages.append(Message(role="assistant", blocks=[{
+            "type": "tool_call", "id": tc.id, "name": tc.name,
+            "arguments": tc.arguments, "thought_signature": None,
+        }]))
+        convo.messages.append(self._result_message([tc], [(out, err)]))
+        return tc, out, err
+
     # -- non-streaming chat -------------------------------------------------
 
     async def chat(self, user_input: str, session_id: str | None = None,
@@ -642,10 +634,17 @@ class Agent:
                 blocks=[{"type": "text", "text": user_input}],
             ))
 
+            # A paused workflow's resume doesn't need a model decision — the
+            # user's message we just appended IS the answer. Resume it
+            # directly so the next provider call (below) sees the result and
+            # relays/acts on it, instead of asking the model to notice the
+            # pause and re-call the tool itself.
+            await self._resume_active_workflow(convo)
+
             for _ in range(self.max_steps):
                 self.provider.usage_purpose = "conversational"
                 resp = await self.provider.complete(
-                    system=self._system_with_reminder(convo.system),
+                    system=self._system_for_call(convo.system),
                     messages=convo.messages,
                     tools=self._exposed_tools(),
                     hosted_mcp=self.hosted_mcp, skills=self.skills,
@@ -732,13 +731,45 @@ class Agent:
             ))
 
             try:
+                # A paused workflow's resume doesn't need a model decision —
+                # the user's message we just appended IS the answer. Resume
+                # it directly (streaming its own segment events) so the next
+                # provider call below sees the result and relays/acts on it,
+                # instead of asking the model to notice the pause and re-call
+                # the tool itself.
+                resume_events: asyncio.Queue = asyncio.Queue()
+
+                async def _resume_sink(kind: str, payload):
+                    await resume_events.put((kind, payload))
+
+                resume_task = asyncio.ensure_future(
+                    self._resume_active_workflow(convo, event_sink=_resume_sink)
+                )
+                while not resume_task.done() or not resume_events.empty():
+                    drainer = asyncio.ensure_future(resume_events.get())
+                    done, _ = await asyncio.wait(
+                        {resume_task, drainer}, return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if drainer in done:
+                        kind, payload = drainer.result()
+                        for ev in _segment_stream_events(kind, payload, sid):
+                            yield ev
+                    else:
+                        drainer.cancel()
+                resumed = resume_task.result()
+                if resumed is not None:
+                    tc, out, err = resumed
+                    yield StreamEvent(type="tool_call", tool_call=tc, session_id=sid)
+                    yield StreamEvent(type="tool_result", tool_call_id=tc.id,
+                                      text=out, is_error=err, session_id=sid)
+
                 final_text = ""
                 hit_step_limit = True
                 for _ in range(self.max_steps):
                     final_resp: LLMResponse | None = None
                     self.provider.usage_purpose = "conversational"
                     async for kind, payload in self.provider.stream(
-                        system=self._system_with_reminder(convo.system),
+                        system=self._system_for_call(convo.system),
                         messages=convo.messages,
                         tools=self._exposed_tools(),
                         hosted_mcp=self.hosted_mcp,

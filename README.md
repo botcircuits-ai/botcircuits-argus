@@ -40,38 +40,45 @@ Argus ships **two skills** your agent loads:
 
 ## Installation
 
-Argus runs inside a host agent. Install the agent you want, then install Argus.
+Argus's deterministic engine runs **natively** as its own agent (`runtime: botcircuits`) — no host agent or skill install required. If you'd rather drive it from inside Claude Code or Hermes instead, that's also supported; see [Using Argus from Claude Code / Hermes](#using-argus-from-claude-code--hermes) below.
 
-### 1. Prerequisite : host agent
-
-Argus is driven by a host AI coding agent. Install whichever you prefer, for example:
-- **Claude Code**
-- **Hermes**
-
-### 2. Install BotCircuits Argus
+### 1. Install BotCircuits Argus
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/botcircuits-ai/botcircuits-argus/main/scripts/install.sh | bash
 ```
 
-### 3. Initialize project settings
-
-Create an initial `.botcircuits/settings.json` in the folder you want to run Argus from. This also installs the workflow skills for the selected runtime's host agent (defaults to `~/.claude/skills`):
+### 2. Initialize project settings
 
 ```bash
 botcircuits init
-botcircuits init --dir <path>               # or target another folder
-botcircuits init --runtime <host-agent>      # set settings.runtime + install its skills
+botcircuits init --dir <path>     # or target another folder
 ```
 
-- `--runtime` — seed `settings.runtime` with a currently supported host agent runtime: `claude-code`, `hermes`. Default use **claude-code**. Also installs that runtime's workflow skills.
+This creates `.botcircuits/settings.json` with `"runtime": "botcircuits"` — the native runtime. `build_workflow` and every built workflow are already registered as **default tools** of the `botcircuits` agent; there's nothing else to install.
+
+### 3. Author and run
+
+```bash
+botcircuits
+```
+
+Drops you into Argus's own chat. Author and run workflows by talking to it directly (see [Workflows](#workflows) below) — the same `build_workflow` tool and per-workflow run tools the skills wrap for other hosts.
+
+---
+
+## Using Argus from Claude Code / Hermes
+
+Prefer to drive Argus from inside an existing AI coding agent instead of its own chat? Install that host agent, then point Argus's runtime at it — Argus installs two **skills** into the host so it knows how to shell out to the `botcircuits` CLI:
+
+```bash
+botcircuits init --runtime claude-code     # or: hermes
+```
+
+- `--runtime` — seed `settings.runtime` with a supported host agent runtime: `claude-code`, `hermes`. Also installs that runtime's workflow skills (defaults to `~/.claude/skills` / `~/.hermes/skills`).
 - `--link` — symlink the skills instead of copying, so updates to Argus are picked up automatically.
 
-Argus dispatches work to an **agent runtime** — the host that actually carries out the work, both when **authoring/building** a workflow and when **running** one.
-
-### 4. Install the skills (optional)
-
-`botcircuits init --runtime <host-agent>` already installs the skills for that runtime. Use this directly if you want to (re)install into another agent, or without touching `settings.json`:
+To (re)install the skills directly, into another agent, or without touching `settings.json`:
 
 ```bash
 botcircuits skills install [--agent claude|hermes] [--link]
@@ -80,7 +87,7 @@ botcircuits skills install [--agent claude|hermes] [--link]
 - `--agent` — target host agent (default: `claude`).
 - `--link` — symlink the skills instead of copying, so updates to Argus are picked up automatically.
 
-### 5. Override the runtime command (optional)
+### Override the runtime command (optional)
 
 If a host's CLI isn't on your `PATH`, or it needs different flags, override its launch command (and optionally `timeout` / `cwd`) under `runtimes`:
 
@@ -103,11 +110,13 @@ If a host's CLI isn't on your `PATH`, or it needs different flags, override its 
 A workflow goes through two phases: you **author** it (describe the process and write the flow json), then it is **built** into a deterministic, runnable form, which the engine then **runs**. Authoring and building happen together. running is a separate step you trigger later.
 
 ### 1. Authoring
-Converse with your AI agent to generate the structure naturally — describe the process in plain business language and the authoring skill writes the workflow JSON for you. If you prefer a visual approach, you can map out the logic in the [Argus Web Manager](#argus-web-manager) flow editor.
+Converse with Argus to generate the structure naturally — describe the process in plain business language and `build_workflow` writes the workflow JSON for you. If you prefer a visual approach, you can map out the logic in the [Argus Web Manager](#argus-web-manager) flow editor.
 
 ```
-claude > "create an order fulfillment workflow: check stock; if all items are in stock, ship. otherwise create a backorder and notify the customer"
+botcircuits > "create an order fulfillment workflow: check stock; if all items are in stock, ship. otherwise create a backorder and notify the customer"
 ```
+
+> Same thing from Claude Code / Hermes instead (see [above](#using-argus-from-claude-code--hermes)): the authoring skill calls the same `build_workflow` tool over the CLI.
 
 This writes your source file to `.botcircuits/workflows/<name>.json` and then builds it automatically (see [Building](#2-building) below).
 
@@ -130,10 +139,10 @@ When you build a workflow, **workflow-builder**:
 ### 3. Running
 
 ```
-claude > "run order fulfillment for order #1024"
+botcircuits > "run order fulfillment for order #1024"
 ```
 
-> Same thing inside Hermes (`hermes "run order fulfillment …"`). The host agent follows the skills and shells out to the `botcircuits` CLI for you.
+> Same thing from Claude Code (`claude "run order fulfillment …"`) or Hermes (`hermes "run order fulfillment …"`) instead: the host agent follows the running skill and shells out to the `botcircuits` CLI for you.
 
 **What the build buys you at run time:** because navigation was compiled ahead of time, the **deterministic engine** — not the AI — decides which step comes next. The engine loads the built workflow from `.build/`, walks the state machine step by step, evaluates the compiled `choices[]` to pick each branch, and dispatches only the current action to the AI agent along with just the variables that step needs. The result: the same inputs always follow the same path, every step is traceable, and the agent never burns tokens reasoning about routing.
 

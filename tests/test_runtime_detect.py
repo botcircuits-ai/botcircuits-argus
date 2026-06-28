@@ -4,10 +4,10 @@ import botcircuits.runtime.detect as d
 
 
 def test_explicit_env_wins(monkeypatch):
-    monkeypatch.setenv(d.RUNTIME_ENV, "native")
+    monkeypatch.setenv(d.RUNTIME_ENV, "botcircuits")
     # Even with a claude-code env marker present, the explicit env wins.
     monkeypatch.setenv("CLAUDECODE", "1")
-    assert d.detect_runtime_name({"runtime": "claude-code"}) == "native"
+    assert d.detect_runtime_name({"runtime": "claude-code"}) == "botcircuits"
 
 
 def test_explicit_settings_when_no_env(monkeypatch):
@@ -32,9 +32,9 @@ def test_falsy_env_marker_ignored(monkeypatch):
     for m in _ALL_MARKERS:
         monkeypatch.delenv(m, raising=False)
     monkeypatch.setenv("CLAUDECODE", "0")
-    # No truthy markers and (mock) no binaries -> native.
+    # No truthy markers and (mock) no binaries -> botcircuits (native).
     monkeypatch.setattr(d.shutil, "which", lambda _b: None)
-    assert d.detect_runtime_name({}) == "native"
+    assert d.detect_runtime_name({}) == "botcircuits"
 
 
 def test_binary_probe_fallback(monkeypatch):
@@ -46,13 +46,13 @@ def test_binary_probe_fallback(monkeypatch):
     assert d.detect_runtime_name({}) == "codex"
 
 
-def test_default_native_when_nothing(monkeypatch):
+def test_default_botcircuits_when_nothing(monkeypatch):
     monkeypatch.delenv(d.RUNTIME_ENV, raising=False)
     for m in ("CLAUDECODE", "CLAUDE_CODE", "CLAUDE_CODE_ENTRYPOINT",
               "CODEX_SANDBOX", "CODEX_HOME", "OPENCLAW", "OPENCLAW_SESSION"):
         monkeypatch.delenv(m, raising=False)
     monkeypatch.setattr(d.shutil, "which", lambda _b: None)
-    assert d.detect_runtime_name({}) == "native"
+    assert d.detect_runtime_name({}) == "botcircuits"
 
 
 def test_runtime_config_settings_override():

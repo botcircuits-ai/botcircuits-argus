@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from botcircuits.runtime.detect import (
-    NATIVE,
+    BOTCIRCUITS,
     detect_runtime_name as _detect,
     select_runtime,
 )
@@ -293,15 +293,16 @@ async def _run(
     if not isinstance(flow, dict):
         raise LocalWorkflowError(f"workflow {name!r} is missing flow")
 
-    # Select the runtime. The runner is for EXTERNAL/CLI hosts; `native` here
-    # would need a live Agent we don't build in this entry point, so reject it
-    # with a clear message (use the in-process CLI / agent loop for native).
+    # Select the runtime. The runner is for EXTERNAL/CLI hosts; `botcircuits`
+    # here would need a live Agent we don't build in this entry point, so
+    # reject it with a clear message (use the in-process CLI / agent loop
+    # for the native botcircuits runtime).
     resolved_name = runtime_name or _detect()
-    if resolved_name == NATIVE:
+    if resolved_name == BOTCIRCUITS:
         raise LocalWorkflowError(
-            "the native runtime has no standalone runner; run the workflow "
-            "through the BotCircuits agent (botcircuits) instead, or pass "
-            "--runtime claude-code."
+            "the native botcircuits runtime has no standalone runner; run "
+            "the workflow through the BotCircuits agent CLI (botcircuits) "
+            "instead, or pass --runtime claude-code."
         )
     # A caller may pin the exact spawn argv for the chosen CLI runtime (e.g.
     # the eval pinning hermes' `--provider`/`-m`, which hermes takes only as

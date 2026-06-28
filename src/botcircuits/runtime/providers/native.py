@@ -25,7 +25,7 @@ from botcircuits.agent.workflow.engine.runner import SegmentResult
 class NativeRuntime(AgentRuntimeProvider):
     """Wrap a live `Agent` so the workflow engine can drive it as a provider."""
 
-    name = "native"
+    name = "botcircuits"
 
     def __init__(self, agent, *, normalize_enabled: bool = True):
         # `agent` is a started `agent.core.Agent`. We hold it (not a copy) so

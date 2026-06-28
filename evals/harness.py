@@ -65,8 +65,9 @@ async def _drive(agent: Agent, prompt: str) -> str:
     text, sid = await agent.chat(prompt)
     turns = 0
     while active_workflow_names(agent.tools) and turns < _MAX_WORKFLOW_TURNS:
-        # Empty nudge: the [Active workflow] reminder tells the model to
-        # re-call the workflow tool to advance to the next step.
+        # Any message resumes a paused workflow directly (Agent.chat resumes
+        # it before the provider call runs) — "continue" is just a nudge for
+        # the model's OWN reply once the resumed step's result is in history.
         text, sid = await agent.chat("continue", session_id=sid)
         turns += 1
     return text
