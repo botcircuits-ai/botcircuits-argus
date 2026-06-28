@@ -218,7 +218,12 @@ def start(*, backend_only: bool = False, frontend_only: bool = False) -> dict:
                     file=sys.stderr,
                 )
             log = log_dir / "backend.log"
-            proc = _spawn(_backend_cmd(), cwd=_repo_root(), log_path=log, env=os.environ.copy())
+            # cwd is the user's invocation directory, not `_repo_root()` — the
+            # backend resolves `.botcircuits/workflows` (via
+            # `_resolve_workflows_dir`) relative to its own cwd, so spawning it
+            # from the package/repo root would silently read/write the wrong
+            # project's workflows and traces.
+            proc = _spawn(_backend_cmd(), cwd=Path.cwd(), log_path=log, env=os.environ.copy())
             state[BACKEND] = Service(
                 BACKEND, proc.pid, _pgid_of(proc.pid), _backend_port(), str(log),
             ).to_dict()
