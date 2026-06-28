@@ -11,8 +11,11 @@ An agent skill (Claude, Hermes, etc.) that runs your repetitive workflows **pred
 ![botcircuits-agent-solution](docs/solution.png)
 
 ```
-claude > "create an order fulfillment workflow with stock check, ship, and backorder branches"
-claude > "run order fulfillment"
+╭──────────────────────────────────────────────╮
+│  TOKENS SAVED        ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓  80%  │
+│  ACCURACY HELD       ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 100%  │
+│  RUN LATENCY         ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 1.4×  │
+╰──────────────────────────────────────────────╯
 ```
 
 
