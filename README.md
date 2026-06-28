@@ -19,8 +19,6 @@ An agent skill (Claude, Hermes, etc.) that runs your repetitive workflows **pred
 <p align="center"><sub>measured across 4 use cases · see <a href="#benchmark">Benchmark</a></sub></p>
 
 
-Why let your LLM agent reason through every routing decision — even when the path is repetitive and predictable?
-
 ## Structured flow control 
 **Replace guesswork with deterministic workflows**. Argus controls navigation, ensuring AI agents follow secure, approved, and repeatable execution paths instead of reasoning through every step.
 
