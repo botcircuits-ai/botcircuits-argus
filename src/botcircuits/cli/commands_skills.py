@@ -31,6 +31,16 @@ _AGENT_TARGETS = {
     "hermes": Path.home() / ".hermes" / "skills",
 }
 
+#: Hermes indexes skills two levels deep (`<category>/<skill-name>/SKILL.md`)
+#: and falls back to using the skill's own directory name as a bogus
+#: "category" for anything installed flat — which both keeps it out of the
+#: `general` bucket the model is told to scan and truncates its description
+#: in the rendered index. Claude Code has no such nesting requirement, so
+#: only Hermes installs get this extra subdirectory.
+_AGENT_CATEGORY = {
+    "hermes": "botcircuits",
+}
+
 
 def add_skills_subparser(subparsers: argparse._SubParsersAction) -> None:
     sk = subparsers.add_parser(
@@ -99,11 +109,13 @@ def _cmd_install(args: argparse.Namespace) -> int:
         target = _AGENT_TARGETS[args.agent]
     else:
         target = _AGENT_TARGETS["claude"]
-    target.mkdir(parents=True, exist_ok=True)
+    category = _AGENT_CATEGORY.get(args.agent)
+    install_dir = (target / category) if category else target
+    install_dir.mkdir(parents=True, exist_ok=True)
 
     for skill in _SKILLS:
         src = src_dir / skill
-        dst = target / skill
+        dst = install_dir / skill
         if not src.is_dir():
             out(C.red(f"[skills] missing skill source: {src}"))
             return 1
