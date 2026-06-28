@@ -30,8 +30,8 @@ evals = [
 botcircuits = "botcircuits.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/botcircuits-ai/botcircuits-agent"
-Issues = "https://github.com/botcircuits-ai/botcircuits-agent/issues"
+Homepage = "https://github.com/botcircuits-ai/botcircuits-argus"
+Issues = "https://github.com/botcircuits-ai/botcircuits-argus/issues"
 
 [build-system]
 requires = ["hatchling"]
