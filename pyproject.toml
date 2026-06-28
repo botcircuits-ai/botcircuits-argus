@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "BotCircuits Agent is a workflow-native AI agent for reliable, predictable, token-efficient multi-step automation without depending on an LLM to drive everything"
 readme = "README.md"
 requires-python = ">=3.11"
-authors = [{ name = "BotCircuits" }]
+authors = [{ name = "Tharanga Thennakoon" }]
 license = { text = "Apache-2.0" }
 dependencies = [
     "anthropic>=0.40.0",
