@@ -235,6 +235,14 @@ def load_config_file(path: str) -> dict[str, Any]:
             '`{"servers": {"<name>": {<fields>}}}`. '
             "See `botcircuits-cli mcp add --help` for help authoring entries."
         )
+    # `runtime` is written by `botcircuits init --runtime ...` to record which
+    # host agent (claude-code, hermes) a project is pinned to, for the
+    # workflow skills to read back. It isn't a CLIConfig knob, so it's not in
+    # _ALLOWED_KEYS — but it's a legitimate, intentionally-written field that
+    # coexists in the same settings.json, not a typo to reject. Accept it,
+    # then drop it before the rest of the dict flows into CLIConfig (which
+    # has no such field).
+    data = {k: v for k, v in data.items() if k != "runtime"}
     unknown = set(data) - _ALLOWED_KEYS
     if unknown:
         raise ConfigError(
