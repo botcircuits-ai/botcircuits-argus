@@ -57,7 +57,25 @@ botcircuits init --dir <path>     # or target another folder
 
 This creates `.botcircuits/settings.json` with `"runtime": "botcircuits"` — the native runtime. `build_workflow` and every built workflow are already registered as **default tools** of the `botcircuits` agent; there's nothing else to install.
 
-### 3. Author and run
+### 3. Configure an LLM provider
+
+Argus needs an API key for one of: `anthropic` (default), `openai`, `gemini`, or `openrouter`.
+
+```bash
+botcircuits setup llm        # interactive: pick provider, model, paste API key
+```
+
+Or skip the wizard and set env vars directly — `<PROVIDER>_API_KEY` plus an optional `LLM_PROVIDER` and `<PROVIDER>_MODEL`:
+
+```bash
+export LLM_PROVIDER=openrouter
+export OPENROUTER_API_KEY=sk-or-...
+export OPENROUTER_MODEL=openai/gpt-4.1   # optional
+```
+
+The wizard saves keys to `~/.botcircuits/.env` (or `./.botcircuits/.env` with `setup --project`/`--local`). On startup Argus loads, in order, the first value found per variable: `BOTCIRCUITS_ENV_FILE` → `./.env` → `./.botcircuits/.env` → `~/.botcircuits/.env` — so a key already exported in your shell always wins, and project-level config overrides user-level.
+
+### 4. Author and run
 
 ```bash
 botcircuits

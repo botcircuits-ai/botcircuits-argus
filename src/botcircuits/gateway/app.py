@@ -46,7 +46,8 @@ def _make_provider(kind: str, model: str | None) -> LLMProvider:
     if kind == "gemini":
         return GeminiProvider(model=model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
     if kind == "openrouter":
-        return OpenRouterProvider(model=model or os.getenv("OPENROUTER_MODEL", "openai/gpt-4.1"))
+        return OpenRouterProvider(model=model or os.getenv("OPENROUTER_MODEL", "openai/gpt-4.1"),
+                                   api_key=os.getenv("OPENROUTER_API_KEY"))
     raise ValueError(f"Unknown LLM_PROVIDER: {kind}")
 
 

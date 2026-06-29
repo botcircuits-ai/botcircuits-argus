@@ -154,6 +154,7 @@ def load_cli_config(args: argparse.Namespace) -> CLIConfig:
         ./.botcircuits/settings.json           (project, shared)
         ./.botcircuits/settings.local.json     (project, gitignored)
         --config <path>                        (explicit override)
+        $LLM_PROVIDER                          (provider only; see below)
         CLI flags                              (highest)
 
     `--auto` is special: it doesn't have its own CLIConfig field, it
@@ -163,6 +164,30 @@ def load_cli_config(args: argparse.Namespace) -> CLIConfig:
     """
     file_values, _used = load_layered_settings(explicit=args.config)
     cli_values = {k: getattr(args, k) for k in _CHAT_FLAGS}
+    # `provider` also has an env-var form ($LLM_PROVIDER, same as the
+    # gateway's lifespan()) so a provider switch doesn't require editing
+    # settings.json — without this, a stale "provider" key written by an
+    # earlier `setup llm` run would silently outrank $LLM_PROVIDER, since
+    # `resolve()` only lets CLI-equivalent values (non-None here) override
+    # file values, and $LLM_PROVIDER was previously only wired into
+    # `DEFAULTS`, the lowest-precedence layer. --provider still wins over
+    # the env var when both are given.
+    resolved_provider = args.provider or os.getenv("LLM_PROVIDER")
+    cli_values["provider"] = resolved_provider
+
+    # `model` in settings.json is only meaningful paired with the provider
+    # that was active when it was written. If the provider just got
+    # overridden above (env var or --provider) away from whatever
+    # settings.json's own "provider" says, that file's "model" almost
+    # certainly belongs to the OLD provider (e.g. an OpenRouter model id
+    # surviving a switch to openai) — so drop it unless the user also gave
+    # --model explicitly. `make_provider()` then falls through to that
+    # provider's own env var / hardcoded default instead.
+    if (resolved_provider and args.model is None
+            and file_values.get("provider") not in (None, resolved_provider)):
+        file_values = dict(file_values)
+        file_values.pop("model", None)
+
     cfg = resolve(file_values, cli_values)
 
     if args.auto is not None:
@@ -197,7 +222,8 @@ def make_provider(kind: str, model: Optional[str]) -> LLMProvider:
     if kind == "gemini":
         return GeminiProvider(model=model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
     if kind == "openrouter":
-        return OpenRouterProvider(model=model or os.getenv("OPENROUTER_MODEL", "openai/gpt-4.1"))
+        return OpenRouterProvider(model=model or os.getenv("OPENROUTER_MODEL", "openai/gpt-4.1"),
+                                   api_key=os.getenv("OPENROUTER_API_KEY"))
     raise ValueError(f"Unknown provider: {kind}")
 
 
