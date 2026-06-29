@@ -9,10 +9,12 @@ from botcircuits.providers.base import LLMProvider
 from botcircuits.providers.anthropic import AnthropicProvider
 from botcircuits.providers.openai import OpenAIProvider
 from botcircuits.providers.gemini import GeminiProvider
+from botcircuits.providers.openrouter import OpenRouterProvider
 
 __all__ = [
     "LLMProvider",
     "AnthropicProvider",
     "OpenAIProvider",
     "GeminiProvider",
+    "OpenRouterProvider",
 ]

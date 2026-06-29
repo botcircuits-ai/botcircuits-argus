@@ -6,8 +6,8 @@ Run:
   uv run python -m botcircuits.gateway
 
 Configure via env vars (loaded from .env on import):
-  LLM_PROVIDER=anthropic|openai|gemini   (default anthropic)
-  ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY
+  LLM_PROVIDER=anthropic|openai|gemini|openrouter   (default anthropic)
+  ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY
   BOTCIRCUITS_CONFIG=/path/to/settings.json   (optional, explicit override)
 
 The gateway auto-discovers the same layered settings files as the CLI:
@@ -30,7 +30,7 @@ from botcircuits.agent import Agent, default_registry
 from botcircuits.cli.config import resolve
 from botcircuits.cli.settings import load_layered_settings
 from botcircuits.cli.system_prompt import DEFAULT_SYSTEM_PROMPT
-from botcircuits.providers import AnthropicProvider, GeminiProvider, OpenAIProvider
+from botcircuits.providers import AnthropicProvider, GeminiProvider, OpenAIProvider, OpenRouterProvider
 from botcircuits.providers.base import LLMProvider
 from botcircuits.gateway.channels import CronChannel, SlackChannel, WebhookChannel, WhatsAppChannel
 from botcircuits.gateway.messaging import MessageGateway
@@ -45,6 +45,8 @@ def _make_provider(kind: str, model: str | None) -> LLMProvider:
         return OpenAIProvider(model=model or os.getenv("OPENAI_MODEL", "gpt-4.1"))
     if kind == "gemini":
         return GeminiProvider(model=model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
+    if kind == "openrouter":
+        return OpenRouterProvider(model=model or os.getenv("OPENROUTER_MODEL", "openai/gpt-4.1"))
     raise ValueError(f"Unknown LLM_PROVIDER: {kind}")
 
 

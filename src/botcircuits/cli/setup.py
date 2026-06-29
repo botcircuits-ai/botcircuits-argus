@@ -23,8 +23,11 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import json as _json
 import os
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Callable
 
@@ -80,6 +83,20 @@ PROVIDER_CATALOG: dict[str, dict] = {
             "gemini-2.5-flash",
         ],
     },
+    "openrouter": {
+        "label": "OpenRouter",
+        "env_var": "OPENROUTER_API_KEY",
+        "api_key_url": "https://openrouter.ai/settings/keys",
+        "models_url": "https://openrouter.ai/api/v1/models",
+        # Fallback used only if the live fetch from `models_url` fails
+        # (offline, API down, etc).
+        "models": [
+            "openai/gpt-4.1",
+            "anthropic/claude-sonnet-4.6",
+            "google/gemini-2.5-flash",
+            "meta-llama/llama-3.3-70b-instruct",
+        ],
+    },
 }
 
 
@@ -128,25 +145,31 @@ def _prompt(question: str, default: str | None = None, password: bool = False) -
     return value or (default or "")
 
 
-def _prompt_choice(question: str, choices: list[str], default: int = 0) -> int:
+def _prompt_choice(question: str, choices: list[str], default: int = 0,
+                    header: str | None = None) -> int:
     """Single-select with arrow-key navigation when stdin is a TTY and
     curses is available; falls back to a numbered prompt otherwise.
+
+    `header`, when given, is a column-header line (e.g. "MODEL  IN  OUT
+    CACHE") drawn once above the choices — used by `_choose_model` for its
+    pricing table. Plain text, no markup.
 
     Returns the chosen index. Enter / Space confirms; Esc cancels and
     keeps the default; Ctrl-C exits the wizard.
     """
     if sys.stdin.isatty():
-        idx = _curses_radiolist(question, choices, default)
+        idx = _curses_radiolist(question, choices, default, header=header)
         if idx is not None:
             # Echo the picked choice so the transcript reflects it after
             # curses tears the screen down.
             out(C.green(f"  ✓ {choices[idx]}"))
             return idx
         # curses unavailable — fall through to numbered prompt
-    return _numbered_choice(question, choices, default)
+    return _numbered_choice(question, choices, default, header=header)
 
 
-def _curses_radiolist(question: str, choices: list[str], default: int) -> int | None:
+def _curses_radiolist(question: str, choices: list[str], default: int,
+                       header: str | None = None) -> int | None:
     """Curses-driven radio list. Returns the chosen index, or None when
     curses can't be initialized (caller should fall back).
 
@@ -186,6 +209,12 @@ def _curses_radiolist(question: str, choices: list[str], default: int) -> int | 
                     max_x - 1, curses.A_DIM,
                 )
                 row += 1
+                if header:
+                    # 7-space lead matches each row's " → (●) " radio-button
+                    # prefix so the header lines up with the model column.
+                    stdscr.addnstr(row, 0, f"       {header}", max_x - 1,
+                                   curses.A_BOLD)
+                    row += 1
             except curses.error:
                 pass
 
@@ -258,10 +287,16 @@ def _flush_stdin() -> None:
         pass
 
 
-def _numbered_choice(question: str, choices: list[str], default: int) -> int:
+def _numbered_choice(question: str, choices: list[str], default: int,
+                      header: str | None = None) -> int:
     """Plain numbered prompt — used when curses is unavailable or stdin
     isn't a TTY (piped input, CI)."""
     out(C.yellow(f"  {question}"))
+    if header:
+        # 6-space lead approximates "    {i+1}. {marker} " for single-digit
+        # indices — rows beyond 9 drift by a column, which is an acceptable
+        # tradeoff for not hardcoding per-row prefix widths.
+        out(C.dim(f"      {header}"))
     for i, choice in enumerate(choices):
         marker = "●" if i == default else "○"
         line = f"    {i + 1}. {marker} {choice}"
@@ -384,13 +419,84 @@ def setup_llm(settings_path: Path) -> None:
         )
 
 
+def _fetch_models(models_url: str) -> list[dict] | None:
+    """GET a provider's model-list endpoint and return entries sorted by id.
+
+    OpenRouter's `/api/v1/models` (no auth required) returns
+    `{"data": [{"id": "openai/gpt-4.1", "pricing": {"prompt": "0.000002",
+    "completion": "0.000008", "input_cache_read": "0.0000005", ...}, ...}, ...]}`
+    — see https://openrouter.ai/docs/api/api-reference/models/get-models.
+    `pricing` values are USD per token; raw `dict` entries are returned as-is
+    so the caller can pull both `id` and `pricing` out. Returns None on any
+    network/parse failure so the caller can fall back to the static catalog
+    list instead of crashing the wizard.
+    """
+    try:
+        req = urllib.request.Request(
+            models_url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            payload = _json.loads(resp.read().decode("utf-8"))
+        entries = sorted(
+            (m for m in payload.get("data", []) if isinstance(m, dict) and m.get("id")),
+            key=lambda m: m["id"],
+        )
+        return entries or None
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+        return None
+
+
+def _format_price_per_million(value: str | None) -> str:
+    """Convert a per-token USD price string (e.g. "0.000002") to a short
+    "$2/M" style label. Missing/zero/unparseable values are "free" — an
+    OpenRouter model with no `pricing` entry for a leg, or "0", means that
+    leg doesn't cost anything (e.g. cache reads on non-caching models)."""
+    if not value:
+        return "free"
+    try:
+        per_token = float(value)
+    except (TypeError, ValueError):
+        return "free"
+    if per_token <= 0:
+        return "free"
+    per_million = per_token * 1_000_000
+    text = f"{per_million:.2f}".rstrip("0").rstrip(".")
+    return f"${text}/M"
+
+
+def _price_columns(pricing: dict | None) -> tuple[str, str, str]:
+    """Pull (in, out, cache) price labels out of an OpenRouter `pricing`
+    block, each already formatted via `_format_price_per_million` (so
+    missing/zero shows as "free")."""
+    pricing = pricing if isinstance(pricing, dict) else {}
+    return (
+        _format_price_per_million(pricing.get("prompt")),
+        _format_price_per_million(pricing.get("completion")),
+        _format_price_per_million(pricing.get("input_cache_read")),
+    )
+
+
 def _choose_model(spec: dict, current_model: str | None) -> str:
     """Pick a model via radio list. Last entry opens a free-form prompt.
 
     `current_model` (when supplied and matching the provider) is shown as
     the highlighted default — same UX as if the user had run setup before.
+    When `spec` has a `models_url`, the live catalog is fetched and used
+    instead of the hardcoded `models` list; that list is only a fallback.
+    Live entries carry per-token pricing, rendered as a MODEL/IN/OUT/CACHE
+    table (header printed above the picker) so cost is visible while
+    choosing — each column is fixed-width and left-aligned under its header.
     """
     suggested: list[str] = list(spec["models"])
+    columns_by_id: dict[str, tuple[str, str, str]] = {}
+    models_url = spec.get("models_url")
+    if models_url:
+        _print_info(f"Fetching available models from {models_url} ...")
+        fetched = _fetch_models(models_url)
+        if fetched:
+            suggested = [m["id"] for m in fetched]
+            columns_by_id = {m["id"]: _price_columns(m.get("pricing")) for m in fetched}
+        else:
+            _print_warning("Couldn't fetch the live model list — using defaults.")
     custom_label = "Type a custom model name…"
 
     # If the current model isn't in the suggested list, slot it in at the
@@ -398,10 +504,33 @@ def _choose_model(spec: dict, current_model: str | None) -> str:
     if current_model and current_model not in suggested:
         suggested = [current_model] + suggested
 
-    choices = suggested + [custom_label]
+    labels = suggested
+    header = None
+    if columns_by_id:
+        id_w = max(len(m) for m in suggested)
+        in_w = max((len(columns_by_id[m][0]) for m in suggested if m in columns_by_id),
+                   default=0)
+        out_w = max((len(columns_by_id[m][1]) for m in suggested if m in columns_by_id),
+                    default=0)
+        col_headers = ("MODEL", "IN", "OUT", "CACHE")
+        id_w = max(id_w, len(col_headers[0]))
+        in_w = max(in_w, len(col_headers[1]))
+        out_w = max(out_w, len(col_headers[2]))
+        # No row-prefix lead here — `_curses_radiolist` / `_numbered_choice`
+        # each prepend their own indent so the header lines up with the
+        # model-id column that follows it, not column 0.
+        header = (f"{col_headers[0]:<{id_w}}  {col_headers[1]:<{in_w}}  "
+                  f"{col_headers[2]:<{out_w}}  {col_headers[3]}")
+        labels = [
+            f"{m:<{id_w}}  {columns_by_id[m][0]:<{in_w}}  {columns_by_id[m][1]:<{out_w}}  {columns_by_id[m][2]}"
+            if m in columns_by_id else m
+            for m in suggested
+        ]
+
+    choices = labels + [custom_label]
     default = suggested.index(current_model) if current_model in suggested else 0
 
-    idx = _prompt_choice(f"Model ({spec['label']}):", choices, default=default)
+    idx = _prompt_choice(f"Model ({spec['label']}):", choices, default=default, header=header)
     if idx == len(choices) - 1:
         # Custom entry — fall through to a text prompt
         return _prompt(
