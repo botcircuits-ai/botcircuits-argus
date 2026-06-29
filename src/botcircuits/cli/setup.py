@@ -146,7 +146,7 @@ def _prompt(question: str, default: str | None = None, password: bool = False) -
 
 
 def _prompt_choice(question: str, choices: list[str], default: int = 0,
-                    header: str | None = None) -> int:
+                    header: str | None = None, searchable: bool = False) -> int:
     """Single-select with arrow-key navigation when stdin is a TTY and
     curses is available; falls back to a numbered prompt otherwise.
 
@@ -154,11 +154,17 @@ def _prompt_choice(question: str, choices: list[str], default: int = 0,
     CACHE") drawn once above the choices — used by `_choose_model` for its
     pricing table. Plain text, no markup.
 
+    `searchable=True` enables type-to-filter in the curses path (see
+    `_curses_radiolist`) for long lists; the plain numbered fallback has
+    no filtering (typing a number always picks by position there, so a
+    text filter would be ambiguous) — `searchable` only affects curses.
+
     Returns the chosen index. Enter / Space confirms; Esc cancels and
     keeps the default; Ctrl-C exits the wizard.
     """
     if sys.stdin.isatty():
-        idx = _curses_radiolist(question, choices, default, header=header)
+        idx = _curses_radiolist(question, choices, default, header=header,
+                                 searchable=searchable)
         if idx is not None:
             # Echo the picked choice so the transcript reflects it after
             # curses tears the screen down.
@@ -169,11 +175,19 @@ def _prompt_choice(question: str, choices: list[str], default: int = 0,
 
 
 def _curses_radiolist(question: str, choices: list[str], default: int,
-                       header: str | None = None) -> int | None:
+                       header: str | None = None, searchable: bool = False) -> int | None:
     """Curses-driven radio list. Returns the chosen index, or None when
     curses can't be initialized (caller should fall back).
 
     Esc returns the default (matches hermes — cancelling keeps current).
+
+    `searchable=True` enables fzf-style type-to-filter: any printable key
+    appends to a query that live-filters `choices` by substring (case
+    insensitive); Backspace edits the query; Esc clears it first, then
+    cancels on a second press. This is for long lists (e.g. OpenRouter's
+    300+ models) where j/k-as-navigation would collide with typing — so
+    it intentionally drops the j/k vim bindings when enabled, and adds a
+    `/ filter` hint to the help line instead of advertising j/k.
     """
     try:
         import curses
@@ -191,8 +205,21 @@ def _curses_radiolist(question: str, choices: list[str], default: int,
             curses.init_pair(2, curses.COLOR_YELLOW, -1)
         cursor = default
         scroll_offset = 0
+        query = ""
+        # (original_index, choice_text) pairs so we can map a filtered
+        # cursor position back to the caller's index space.
+        all_items = list(enumerate(choices))
+        visible = all_items
 
         while True:
+            if searchable:
+                q = query.lower()
+                visible = [(i, c) for i, c in all_items if q in c.lower()]
+                if not visible:
+                    visible = all_items
+                if cursor >= len(visible):
+                    cursor = max(0, len(visible) - 1)
+
             stdscr.clear()
             max_y, max_x = stdscr.getmaxyx()
             row = 0
@@ -203,12 +230,15 @@ def _curses_radiolist(question: str, choices: list[str], default: int,
                     hattr |= curses.color_pair(2)
                 stdscr.addnstr(row, 0, question, max_x - 1, hattr)
                 row += 1
-                stdscr.addnstr(
-                    row, 0,
-                    "  ↑↓ navigate  ENTER select  ESC cancel",
-                    max_x - 1, curses.A_DIM,
-                )
+                help_text = ("  ↑↓ navigate  ENTER select  ESC cancel  /type to filter"
+                             if searchable else
+                             "  ↑↓ navigate  ENTER select  ESC cancel")
+                stdscr.addnstr(row, 0, help_text, max_x - 1, curses.A_DIM)
                 row += 1
+                if searchable:
+                    stdscr.addnstr(
+                        row, 0, f"  Filter: {query}", max_x - 1, curses.A_BOLD)
+                    row += 1
                 if header:
                     # 7-space lead matches each row's " → (●) " radio-button
                     # prefix so the header lines up with the model column.
@@ -225,17 +255,18 @@ def _curses_radiolist(question: str, choices: list[str], default: int,
             elif cursor >= scroll_offset + visible_rows:
                 scroll_offset = cursor - visible_rows + 1
 
-            for draw_i, i in enumerate(
-                range(scroll_offset, min(len(choices), scroll_offset + visible_rows))
+            for draw_i, vi in enumerate(
+                range(scroll_offset, min(len(visible), scroll_offset + visible_rows))
             ):
                 y = draw_i + items_start
                 if y >= max_y - 1:
                     break
-                radio = "●" if i == cursor else "○"
-                arrow = "→" if i == cursor else " "
-                line = f" {arrow} ({radio}) {choices[i]}"
+                orig_i, text = visible[vi]
+                radio = "●" if vi == cursor else "○"
+                arrow = "→" if vi == cursor else " "
+                line = f" {arrow} ({radio}) {text}"
                 attr = curses.A_NORMAL
-                if i == cursor:
+                if vi == cursor:
                     attr = curses.A_BOLD
                     if curses.has_colors():
                         attr |= curses.color_pair(1)
@@ -247,16 +278,33 @@ def _curses_radiolist(question: str, choices: list[str], default: int,
             stdscr.refresh()
             key = stdscr.getch()
 
-            if key in {curses.KEY_UP, ord("k")}:
-                cursor = (cursor - 1) % len(choices)
-            elif key in {curses.KEY_DOWN, ord("j")}:
-                cursor = (cursor + 1) % len(choices)
-            elif key in {ord(" "), curses.KEY_ENTER, 10, 13}:
-                result[0] = cursor
+            up_keys = {curses.KEY_UP} | (set() if searchable else {ord("k")})
+            down_keys = {curses.KEY_DOWN} | (set() if searchable else {ord("j")})
+            select_keys = {curses.KEY_ENTER, 10, 13} | (set() if searchable else {ord(" ")})
+
+            if key in up_keys:
+                cursor = (cursor - 1) % len(visible)
+            elif key in down_keys:
+                cursor = (cursor + 1) % len(visible)
+            elif key in select_keys:
+                result[0] = visible[cursor][0]
                 return
-            elif key in {27, ord("q")}:
+            elif searchable and key in {curses.KEY_BACKSPACE, 127, 8}:
+                query = query[:-1]
+                cursor = 0
+            elif key == 27:  # Esc
+                if searchable and query:
+                    query = ""
+                    cursor = 0
+                else:
+                    result[0] = default
+                    return
+            elif key == ord("q") and not searchable:
                 result[0] = default
                 return
+            elif searchable and 32 <= key < 127:
+                query += chr(key)
+                cursor = 0
 
     try:
         curses.wrapper(_draw)
@@ -530,7 +578,11 @@ def _choose_model(spec: dict, current_model: str | None) -> str:
     choices = labels + [custom_label]
     default = suggested.index(current_model) if current_model in suggested else 0
 
-    idx = _prompt_choice(f"Model ({spec['label']}):", choices, default=default, header=header)
+    # Type-to-filter only kicks in for the live-fetched catalog (e.g.
+    # OpenRouter's 300+ models) — short hardcoded lists don't need it and
+    # j/k navigation stays available there.
+    idx = _prompt_choice(f"Model ({spec['label']}):", choices, default=default,
+                          header=header, searchable=bool(columns_by_id))
     if idx == len(choices) - 1:
         # Custom entry — fall through to a text prompt
         return _prompt(
