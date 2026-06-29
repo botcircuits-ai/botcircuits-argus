@@ -126,16 +126,77 @@ def _print_error(msg: str) -> None:
     out(C.red(f"  ✗ {msg}"))
 
 
+def _masked_input(label: str) -> str | None:
+    """Read a line from the controlling TTY, echoing `*` per character so
+    the user can see that typing/pasting registered without exposing the
+    secret itself. Returns None if raw-mode reading isn't available (not a
+    TTY, non-POSIX, etc) so the caller can fall back to `getpass`.
+
+    Handles Backspace/Delete (erases the last `*`) and Enter (submits).
+    Pasted input arrives as a burst of bytes from the terminal and is
+    handled identically to typed characters — each byte still echoes one
+    `*`. Ctrl-C raises KeyboardInterrupt like a normal terminal would.
+    """
+    if not sys.stdin.isatty():
+        return None
+    try:
+        import termios
+        import tty
+    except ImportError:
+        return None
+
+    fd = sys.stdin.fileno()
+    old_attrs = termios.tcgetattr(fd)
+    chars: list[str] = []
+    try:
+        tty.setraw(fd)
+        sys.stdout.write(label)
+        sys.stdout.flush()
+        while True:
+            ch = sys.stdin.read(1)
+            if ch in ("\r", "\n"):
+                break
+            if ch == "\x03":  # Ctrl-C
+                raise KeyboardInterrupt
+            if ch == "\x04" and not chars:  # Ctrl-D on empty line == EOF
+                raise EOFError
+            if ch in ("\x7f", "\x08"):  # Backspace / Delete
+                if chars:
+                    chars.pop()
+                    sys.stdout.write("\b \b")
+                    sys.stdout.flush()
+                continue
+            if ch.isprintable():
+                chars.append(ch)
+                sys.stdout.write("*")
+                sys.stdout.flush()
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+    return "".join(chars)
+
+
 def _prompt(question: str, default: str | None = None, password: bool = False) -> str:
     """Prompt for a line of input. Returns the trimmed value, or the default
-    if the user just hit Enter. Ctrl-C exits the wizard."""
+    if the user just hit Enter. Ctrl-C exits the wizard.
+
+    `password=True` masks the input by echoing one `*` per character typed
+    or pasted — unlike plain `getpass.getpass()` (which shows nothing at
+    all), this gives the user visual confirmation that a paste registered.
+    Falls back to `getpass` when raw-mode TTY reading isn't available
+    (piped stdin, non-POSIX platforms).
+    """
     suffix = f" [{default}]" if default else ""
     label = C.yellow(f"  {question}{suffix}: ")
     try:
         if password:
-            # getpass writes its own prompt to /dev/tty; pre-print the label
-            # so the formatting is consistent with the non-password path.
-            value = getpass.getpass(label)
+            value = _masked_input(label)
+            if value is None:
+                # getpass writes its own prompt to /dev/tty; pre-print the
+                # label so the formatting is consistent with the non-password
+                # path.
+                value = getpass.getpass(label)
         else:
             value = input(label)
     except (KeyboardInterrupt, EOFError):
