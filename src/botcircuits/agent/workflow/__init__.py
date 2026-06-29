@@ -357,10 +357,21 @@ def workflow_tool(
         text = directive.as_plain_text(action)
         return f"{notes_block}\n\n{text}" if notes_block else text
 
+    # Seed the FIRST call's schema from the workflow's declared top-level
+    # `flow.variables` (not just branch variables revealed after a pause).
+    # Without this, a model literally cannot pass `topic`/`research_depth`-
+    # style inputs on the initial call — the schema would have no
+    # properties — forcing every run through a human_feedback pause even
+    # when the caller already has the values. Passing extra (output-only)
+    # variables as args is harmless: they just merge into slots the
+    # workflow overwrites anyway.
+    declared_variables = record.get("flow", {}).get("variables") or []
+    initial_schema = _branch_input_schema(declared_variables)
+
     tool = LocalTool(
         name=wf_name,
         description=wf_desc,
-        input_schema=dict(_EMPTY_SCHEMA),
+        input_schema=initial_schema,
         handler=_handler,
     )
     # Expose the session state so the agent loop can detect that this

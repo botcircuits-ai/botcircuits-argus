@@ -542,13 +542,14 @@ class Agent:
             return None
 
         async def _runner(*, actions, branch_variables, system_notes, slots,
-                          item_variables=None):
+                          item_variables=None, data_variables=None):
             return await self._run_segment(
                 actions=actions,
                 branch_variables=branch_variables,
                 system_notes=system_notes,
                 slots=slots,
                 item_variables=item_variables,
+                data_variables=data_variables,
                 event_sink=event_sink,
             )
         return _runner

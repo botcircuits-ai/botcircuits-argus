@@ -7,6 +7,7 @@ manages history.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from botcircuits.types import LLMResponse, Message, ToolCall
@@ -94,8 +95,11 @@ class OpenAIProvider(LLMProvider):
             "model": self.model,
             "input": self._msgs_to_input(system, messages),
             "max_output_tokens": max_tokens,
-            "temperature": DEFAULT_TEMPERATURE,
         }
+        # Reasoning-style models (gpt-5*, o1*, o3*) reject a non-default
+        # temperature outright ("Unsupported parameter: 'temperature'").
+        if not re.match(r"^(gpt-5|o1|o3)", self.model):
+            kwargs["temperature"] = DEFAULT_TEMPERATURE
         if api_tools:
             kwargs["tools"] = api_tools
         return kwargs
