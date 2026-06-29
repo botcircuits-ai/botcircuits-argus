@@ -8,5 +8,20 @@
       "timeout_seconds": 30,
       "max_output_bytes": 10000
     }
+  },
+  "permissions": {
+    "allow": [
+      "Read",
+      "Bash(git status)",
+      "Bash(npm run *)"
+    ],
+    "ask": [
+      "Bash(git push *)"
+    ],
+    "deny": [
+      "Read(.env)",
+      "Read(~/.ssh/**)",
+      "Bash(rm -rf *)"
+    ]
   }
 }

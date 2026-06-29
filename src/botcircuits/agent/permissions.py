@@ -31,6 +31,14 @@ Tool name groups, mirroring Claude Code's Bash/Read/Edit/WebFetch split:
 A rule can also be written with the concrete tool name (e.g.
 `read_file(...)`, `shell_exec(...)`) instead of the group alias; both
 forms are accepted and behave identically.
+
+`Read`/`Edit` deny and ask rules also apply to file-reading shell commands
+(`cat`, `head`, `tail`, `less`, `more`) recognized inside `shell_exec`
+argv, the same way Claude Code's docs describe for its Bash tool: a
+`Read(.env)` deny rule blocks `read_file(path=".env")` AND
+`shell_exec(argv=["cat", ".env"])`. This only covers the small set of
+recognized commands — it is not a sandbox, and a script that opens files
+itself (python, node, ...) is not inspected.
 """
 
 from __future__ import annotations
@@ -71,10 +79,20 @@ _BASH_TOOLS = {"shell_exec"}
 # against argv[0] only — these commands can't mutate state regardless of
 # their flags/arguments. Not configurable; add an explicit `ask` or `deny`
 # rule for one of these names to require a prompt again.
+#
+# File-dumping commands (FILE_READ_COMMANDS below) are deliberately
+# excluded here even though they're read-only, because they can be used to
+# read a Read-denied path (e.g. `cat .env`) and must go through the
+# Read-rule cross-check instead of a blanket auto-allow.
 READ_ONLY_COMMANDS = frozenset({
-    "pwd", "ls", "cat", "echo", "head", "tail", "wc", "which",
-    "stat", "du", "whoami", "date",
+    "pwd", "ls", "echo", "wc", "which", "stat", "du", "whoami", "date",
 })
+
+# Commands whose trailing non-flag arguments are file paths to read.
+# Checked against Read deny/ask rules so `Read(.env)` also blocks
+# `shell_exec(["cat", ".env"])`. Not an exhaustive shell-safety net — see
+# the module docstring.
+FILE_READ_COMMANDS = frozenset({"cat", "head", "tail", "less", "more"})
 
 
 def _is_builtin_read_only(tool_name: str, args: dict) -> bool:
@@ -84,6 +102,24 @@ def _is_builtin_read_only(tool_name: str, args: dict) -> bool:
     if not isinstance(argv, list) or not argv:
         return False
     return str(argv[0]) in READ_ONLY_COMMANDS
+
+
+def _file_read_command_paths(args: dict) -> list[str]:
+    """If `args["argv"]` invokes a recognized file-dumping command,
+    return its non-flag trailing arguments (candidate file paths).
+    Otherwise return []."""
+    argv = args.get("argv")
+    if not isinstance(argv, list) or not argv:
+        return []
+    if str(argv[0]) not in FILE_READ_COMMANDS:
+        return []
+    paths = []
+    for tok in argv[1:]:
+        tok = str(tok)
+        if tok.startswith("-"):
+            continue
+        paths.append(tok)
+    return paths
 
 
 @dataclass(frozen=True)
@@ -180,6 +216,10 @@ def _path_specifier_matches(specifier: str, args: dict, *, cwd: str | None = Non
     target = args.get("path")
     if not isinstance(target, str) or not target:
         return False
+    return _path_matches(specifier, target, cwd=cwd)
+
+
+def _path_matches(specifier: str, target: str, *, cwd: str | None = None) -> bool:
     base = Path(cwd) if cwd else Path.cwd()
     abs_target = _resolve(target, base)
 
@@ -286,16 +326,28 @@ class PermissionSet:
         )
 
     def evaluate(self, tool_name: str, args: dict) -> Decision:
-        """deny -> ask -> allow, first match wins. Falls back to the
-        built-in read-only command allowlist (shell_exec only) before
-        giving up with UNSPECIFIED, so an explicit ask/deny rule can
-        still force a prompt for one of those commands."""
+        """deny -> ask -> allow, first match wins. Before falling back to
+        the built-in read-only command allowlist (shell_exec only), a
+        shell_exec call to a recognized file-dumping command (cat, head,
+        ...) is cross-checked against the Read deny/ask rules for each
+        path argument, so `Read(.env)` also blocks `cat .env`. Anything
+        still unmatched is UNSPECIFIED."""
         for rule in self.deny:
             if rule.matches(tool_name, args):
                 return Decision.DENY
+        for path in _file_read_command_paths(args):
+            if any(_path_matches(r.specifier, path) for r in self.deny
+                   if _tool_name_matches(r.tool, "read_file") and r.specifier is not None):
+                return Decision.DENY
+
         for rule in self.ask:
             if rule.matches(tool_name, args):
                 return Decision.ASK
+        for path in _file_read_command_paths(args):
+            if any(_path_matches(r.specifier, path) for r in self.ask
+                   if _tool_name_matches(r.tool, "read_file") and r.specifier is not None):
+                return Decision.ASK
+
         for rule in self.allow:
             if rule.matches(tool_name, args):
                 return Decision.ALLOW

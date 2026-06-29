@@ -147,7 +147,13 @@ def test_builtin_read_only_commands_auto_allowed():
     ps = PermissionSet()
     assert ps.evaluate("shell_exec", {"argv": ["pwd"]}) == Decision.ALLOW
     assert ps.evaluate("shell_exec", {"argv": ["ls", "-la"]}) == Decision.ALLOW
-    assert ps.evaluate("shell_exec", {"argv": ["cat", "foo.txt"]}) == Decision.ALLOW
+
+
+def test_file_read_commands_are_not_blanket_auto_allowed():
+    # cat/head/tail are excluded from the unconditional allowlist because
+    # they must go through the Read-rule cross-check below instead.
+    ps = PermissionSet()
+    assert ps.evaluate("shell_exec", {"argv": ["cat", "foo.txt"]}) == Decision.UNSPECIFIED
 
 
 def test_non_read_only_command_stays_unspecified():
@@ -168,6 +174,44 @@ def test_explicit_deny_overrides_builtin_read_only():
 def test_builtin_read_only_does_not_leak_to_other_tools():
     ps = PermissionSet()
     assert ps.evaluate("read_file", {"path": "pwd"}) == Decision.UNSPECIFIED
+
+
+# ---------------------------------------------------------------------------
+# Read deny/ask rules also apply to file-dumping shell commands
+# ---------------------------------------------------------------------------
+
+
+def test_read_deny_blocks_cat_of_denied_path():
+    ps = PermissionSet.from_config({"deny": ["Read(.env)"]})
+    assert ps.evaluate("read_file", {"path": ".env"}) == Decision.DENY
+    assert ps.evaluate("shell_exec", {"argv": ["cat", ".env"]}) == Decision.DENY
+
+
+def test_read_deny_blocks_head_and_tail_of_denied_path():
+    ps = PermissionSet.from_config({"deny": ["Read(.env)"]})
+    assert ps.evaluate("shell_exec", {"argv": ["head", "-5", ".env"]}) == Decision.DENY
+    assert ps.evaluate("shell_exec", {"argv": ["tail", ".env"]}) == Decision.DENY
+
+
+def test_read_deny_blocks_cat_of_home_anchored_path():
+    ps = PermissionSet.from_config({"deny": ["Read(~/.ssh/**)"]})
+    assert ps.evaluate("shell_exec", {"argv": ["cat", "~/.ssh/id_rsa"]}) == Decision.DENY
+
+
+def test_read_ask_applies_to_cat_too():
+    ps = PermissionSet.from_config({"ask": ["Read(secrets/**)"]})
+    assert ps.evaluate("shell_exec", {"argv": ["cat", "secrets/token"]}) == Decision.ASK
+
+
+def test_cat_of_non_denied_path_is_unaffected():
+    ps = PermissionSet.from_config({"deny": ["Read(.env)"]})
+    assert ps.evaluate("shell_exec", {"argv": ["cat", "ok.txt"]}) == Decision.UNSPECIFIED
+
+
+def test_read_deny_does_not_apply_to_unrelated_commands():
+    ps = PermissionSet.from_config({"deny": ["Read(.env)"]})
+    # `echo .env` doesn't read the file, so the cross-check must not fire.
+    assert ps.evaluate("shell_exec", {"argv": ["echo", ".env"]}) == Decision.ALLOW
 
 
 # ---------------------------------------------------------------------------

@@ -222,7 +222,11 @@ class Agent:
         self.hosted_mcp = [s for s in servers if s.mode == "hosted"]
         self._local_mcp = LocalMCPManager([s for s in servers if s.mode == "local"])
         self._tools_built = False
-        self.tools = ToolRegistry()
+        # Carry over the permission rules from the caller's registry (set
+        # via `default_registry(..., permissions=...)`) — `start()` below
+        # re-registers each LocalTool individually into this fresh
+        # registry, which would otherwise silently drop them.
+        self.tools = ToolRegistry(permissions=self.user_tools.permissions)
 
     # -- async lifecycle ----------------------------------------------------
 
