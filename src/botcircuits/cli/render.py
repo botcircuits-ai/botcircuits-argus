@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from botcircuits.cli.ansi import C, out
+from botcircuits.cli.ansi import C, Spinner, out
 
 if TYPE_CHECKING:
     from botcircuits.agent import Agent
@@ -17,7 +17,13 @@ def preview(s: str, n: int = 200) -> str:
 
 
 async def run_streaming(agent: "Agent", msg: str, state: "CLIState") -> None:
-    out(C.bold(C.cyan("assistant> ")), end="")
+    spinner = Spinner()
+
+    def _print_prefix() -> None:
+        out(C.bold(C.cyan("argus> ")), end="")
+
+    _print_prefix()
+    spinner.start()  # spins until the first event of this turn arrives
     saw_text = False
     sid = state.session_id
     last_was_text = False
@@ -27,11 +33,13 @@ async def run_streaming(agent: "Agent", msg: str, state: "CLIState") -> None:
             state.session_id = ev.session_id  # capture new session id
 
         if ev.type == "text_delta":
+            spinner.stop()
             out(ev.text, end="", flush=True)
             saw_text = True
             last_was_text = True
 
         elif ev.type == "tool_call":
+            spinner.stop()
             if last_was_text:
                 out()  # break the line we were streaming on
                 last_was_text = False
@@ -40,12 +48,14 @@ async def run_streaming(agent: "Agent", msg: str, state: "CLIState") -> None:
             out(C.magenta(f"  ▸ tool_call  {tc.name}({args_preview})"))
 
         elif ev.type == "tool_result":
+            spinner.stop()
             color = C.red if ev.is_error else C.green
             label = "error" if ev.is_error else "result"
             shown = ev.text if state.show_tool_results else preview(ev.text or "", 200)
             out(color(f"  ◂ {label}      ") + (shown or "(empty)"))
             # Next round of assistant text starts fresh; reprint prefix.
-            out(C.bold(C.cyan("assistant> ")), end="")
+            _print_prefix()
+            spinner.start()
             last_was_text = False
 
         elif ev.type == "turn_end":
@@ -53,6 +63,7 @@ async def run_streaming(agent: "Agent", msg: str, state: "CLIState") -> None:
             pass
 
         elif ev.type == "done":
+            spinner.stop()
             if not saw_text and ev.text:
                 # Some providers/turns won't have streamed any text deltas
                 # (rare, but possible). Print the final text we got.
@@ -61,13 +72,17 @@ async def run_streaming(agent: "Agent", msg: str, state: "CLIState") -> None:
             return
 
         elif ev.type == "error":
+            spinner.stop()
             out()
             out(C.red(f"[error] {ev.text}"))
             return
 
+    spinner.stop()
+
 
 async def run_blocking(agent: "Agent", msg: str, state: "CLIState") -> None:
-    reply, sid = await agent.chat(msg, session_id=state.session_id,
-                                  system=state.system)
+    async with Spinner():
+        reply, sid = await agent.chat(msg, session_id=state.session_id,
+                                      system=state.system)
     state.session_id = sid
-    out(C.bold(C.cyan("assistant> ")) + reply)
+    out(C.bold(C.cyan("argus> ")) + reply)
