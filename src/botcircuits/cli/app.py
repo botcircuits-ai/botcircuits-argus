@@ -279,7 +279,7 @@ async def amain(args: argparse.Namespace) -> int:
     provider = make_provider(cfg.provider, cfg.model)
 
     try:
-        registry = default_registry(cfg.tools, provider=provider)
+        registry = default_registry(cfg.tools, provider=provider, permissions=cfg.permissions)
     except ValueError as e:
         out(C.red(f"[tools] {e}"))
         return 2

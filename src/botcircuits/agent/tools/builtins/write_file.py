@@ -25,7 +25,7 @@ def write_file_tool(
 ) -> LocalTool:
     effective_auto = _confirm.effective_auto(auto)
 
-    async def _handler(args: dict) -> dict:
+    async def _handler(args: dict, context: dict | None = None) -> dict:
         path = args.get("path")
         content = args.get("content")
         if not isinstance(path, str) or not path:
@@ -42,6 +42,7 @@ def write_file_tool(
                 ),
             }
 
+        preapproved = bool((context or {}).get("permission_preapproved"))
         existed = os.path.exists(path)
         preview = _make_preview(content)
         lines = [
@@ -51,7 +52,9 @@ def write_file_tool(
             f"preview:",
             *[f"  {ln}" for ln in preview.splitlines()],
         ]
-        if effective_auto:
+        if preapproved:
+            pass
+        elif effective_auto:
             _confirm.warn("write_file writing:", lines)
         else:
             allowed = await _confirm.confirm("write_file proposes:", lines,

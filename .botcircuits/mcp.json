@@ -1,14 +1,5 @@
 {
   "servers": {
-    "fs": {
-      "transport": "stdio",
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-filesystem",
-        "/tmp"
-      ]
-    },
     "playwright": {
       "transport": "stdio",
       "command": "npx",

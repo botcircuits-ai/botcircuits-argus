@@ -34,6 +34,7 @@ from botcircuits.agent.tools.builtins import (
     todo_write,
     write_file,
 )
+from botcircuits.agent.permissions import PermissionSet
 from botcircuits.agent.tools.registry import LocalTool, ToolHandler, ToolRegistry
 
 if TYPE_CHECKING:
@@ -81,6 +82,7 @@ def default_registry(
     tools_config: dict[str, dict[str, Any] | None] | None = None,
     *,
     provider: LLMProvider | None = None,
+    permissions: dict[str, Any] | None = None,
 ) -> ToolRegistry:
     """Registry preloaded with the built-in local tools.
 
@@ -109,6 +111,11 @@ def default_registry(
     so their LLM-driven steps (e.g., condition indexing) can run. Tools
     that don't use it ignore the kwarg.
 
+    `permissions` is the `{"allow": [...], "ask": [...], "deny": [...]}`
+    block from settings (see `agent/permissions.py`). Rules are evaluated
+    on every `ToolRegistry.run()` call, deny -> ask -> allow; a call that
+    matches no rule falls back to the tool's own gate unchanged.
+
     Unknown tool names raise ValueError so typos surface immediately.
     """
     cfg = tools_config or {}
@@ -119,7 +126,7 @@ def default_registry(
             f"Known: {sorted(_BUILTINS)}"
         )
 
-    reg = ToolRegistry()
+    reg = ToolRegistry(permissions=PermissionSet.from_config(permissions))
     for name, module in _BUILTINS.items():
         if name in cfg and (cfg[name] is None or cfg[name] is False):
             continue  # explicitly disabled

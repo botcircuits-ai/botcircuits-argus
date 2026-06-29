@@ -62,7 +62,7 @@ def shell_exec_tool(
     """
     effective_auto = _confirm.effective_auto(auto)
 
-    async def _handler(args: dict) -> dict:
+    async def _handler(args: dict, context: dict | None = None) -> dict:
         argv = args.get("argv")
         background = bool(args.get("background", False))
         if not isinstance(argv, list) or not argv:
@@ -70,11 +70,14 @@ def shell_exec_tool(
         if not all(isinstance(a, str) for a in argv):
             return {"error": "argv must contain only strings"}
 
+        preapproved = bool((context or {}).get("permission_preapproved"))
         pretty = " ".join(repr(a) if " " in a else a for a in argv)
         lines = [f"cmd:  {pretty}"]
         if background:
             lines.append("mode: background (use shell_status / shell_stop)")
-        if effective_auto:
+        if preapproved:
+            pass
+        elif effective_auto:
             _confirm.warn("shell_exec running:", lines)
         else:
             allowed = await _confirm.confirm("shell_exec proposes:", lines)

@@ -68,7 +68,7 @@ async def lifespan(app: FastAPI):
     provider = _make_provider(cfg.provider, cfg.model)
     agent = Agent(
         provider=provider,
-        tools=default_registry(cfg.tools, provider=provider),
+        tools=default_registry(cfg.tools, provider=provider, permissions=cfg.permissions),
         mcp_servers=cfg.mcp_servers,
         max_tokens=cfg.max_tokens,
         max_steps=cfg.max_steps,
