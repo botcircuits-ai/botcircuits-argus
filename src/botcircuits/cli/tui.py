@@ -118,6 +118,12 @@ class TUISession:
         first = await self._read_one_line()
         if first is None:
             return None
+
+        # A background task may have queued a pause while we were waiting for
+        # input. Activate it now so the caller's dispatch_reply() sees it
+        # without needing another read_message() cycle.
+        await self._maybe_activate_next_pause()
+
         if first.strip() == '"""':
             lines: list[str] = []
             while True:

@@ -32,6 +32,8 @@ from botcircuits.agent.tools.builtins import (
     shell_stop,
     time,
     todo_write,
+    web_extract,
+    web_search,
     write_file,
 )
 from botcircuits.agent.permissions import PermissionSet
@@ -60,6 +62,8 @@ _BUILTINS = {
     "build_workflow": build_workflow,
     "memory": memory,
     "human_feedback": human_feedback,
+    "web_search": web_search,
+    "web_extract": web_extract,
 }
 
 

@@ -29,6 +29,8 @@ from botcircuits.agent.tools.builtins import (
     shell_stop,
     time,
     todo_write,
+    web_extract,
+    web_search,
     write_file,
 )
 from botcircuits.agent.tools.builtins.shell import shell_exec_tool
@@ -50,5 +52,7 @@ __all__ = [
     "shell_stop",
     "time",
     "todo_write",
+    "web_extract",
+    "web_search",
     "write_file",
 ]

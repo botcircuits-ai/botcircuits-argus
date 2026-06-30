@@ -298,6 +298,10 @@ async def amain(args: argparse.Namespace) -> int:
                 if not msg.strip():
                     continue
 
+                # A background task may have queued a pause while the user was
+                # typing. Drain the queue now so dispatch_reply sees it.
+                await tui._maybe_activate_next_pause()
+
                 # Route reply to a paused background task (workflow, permission, etc.)
                 if await tui.dispatch_reply(msg):
                     # Give the resumed task a few event-loop ticks to run before

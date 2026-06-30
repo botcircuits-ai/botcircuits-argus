@@ -52,26 +52,27 @@ def warn(title: str, lines: list[str]) -> None:
 
 async def confirm(title: str, lines: list[str], prompt: str = "run? [y/N]: ",
                   workflow_bg=None) -> bool:
-    """Prompt on stderr, read y/N from the user. Default is deny.
+    """Show the proposal block immediately, then pause for y/N.
 
-    Routing priority:
-    1. `workflow_bg` set → background workflow channel (WorkflowTask.pause).
-    2. Active TUISession → TUISession.pause() so the y/N question rides
-       the prompt_toolkit input prompt instead of fighting it for stdin.
-    3. Plain terminal (no TUI) → write to stderr + read via executor.
+    The block (title + lines) is always printed right away via print() so
+    it appears in the output stream before the input prompt changes.  Only
+    the bare y/N question is sent to the pause channel — this way the user
+    sees the full plan/proposal before being asked to approve it, regardless
+    of whether a TUISession or a background workflow channel is active.
 
-    Rules 1 and 2 both ultimately call TUISession.pause() — keeping a
-    single stdin reader so prompt_toolkit and raw input() never compete.
+    Routing for the y/N read:
+    1. `workflow_bg` set → WorkflowTask.pause() → TUISession.pause().
+    2. Active TUISession → TUISession.pause() directly.
+    3. Plain terminal (no TUI) → stderr write + executor input().
     """
-    question = _format_block(title, lines).rstrip() + f"\n      {prompt}"
+    # Print the proposal block immediately to stdout so it's visible
+    # before we block waiting for input.
+    print(_format_block(title, lines), end="", flush=True)
 
     if workflow_bg is not None:
-        answer = await workflow_bg.pause(question)
+        answer = await workflow_bg.pause(prompt)
         return answer.strip().lower() in ("y", "yes")
 
-    # Route through TUISession when active — raw input() inside a
-    # run_in_executor competes with prompt_toolkit for stdin bytes and
-    # hangs the terminal after the user types their answer.
     try:
         from botcircuits.cli.tui import get_tui_session
         tui = get_tui_session()
@@ -79,10 +80,10 @@ async def confirm(title: str, lines: list[str], prompt: str = "run? [y/N]: ",
         tui = None
 
     if tui is not None:
-        answer = await tui.pause(question)
+        answer = await tui.pause(prompt)
         return answer.strip().lower() in ("y", "yes")
 
-    sys.stderr.write(question)
+    sys.stderr.write(f"      {prompt}")
     sys.stderr.flush()
     loop = asyncio.get_running_loop()
     try:
