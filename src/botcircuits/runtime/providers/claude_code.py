@@ -130,6 +130,7 @@ class ClaudeCodeRuntime(AgentRuntimeProvider):
             actions, branch_variables, system_notes,
             item_variables=item_variables,
             data_variables=data_variables,
+            slots=slots,
         )
         # The host CLI is stateless between segments, so it has no conversation
         # history. When the engine resumes a paused segment after the user

@@ -60,6 +60,7 @@ from botcircuits.cli.render import run_blocking, run_streaming
 from botcircuits.cli.settings import load_layered_settings
 from botcircuits.cli.setup import add_setup_subparser, run_setup_wizard
 from botcircuits.cli.system_prompt import DEFAULT_SYSTEM_PROMPT
+from botcircuits.cli.tui import TUISession, set_tui_session
 
 
 # ---------------------------------------------------------------------------
@@ -227,41 +228,6 @@ def make_provider(kind: str, model: Optional[str]) -> LLMProvider:
     raise ValueError(f"Unknown provider: {kind}")
 
 
-# ---------------------------------------------------------------------------
-# Input handling — non-blocking line reads + multi-line paste support
-# ---------------------------------------------------------------------------
-
-async def read_line(prompt: str) -> Optional[str]:
-    """Read one line from stdin without blocking the event loop.
-    Returns None on EOF (Ctrl-D)."""
-    loop = asyncio.get_running_loop()
-    try:
-        return await loop.run_in_executor(None, lambda: input(prompt))
-    except EOFError:
-        return None
-    except KeyboardInterrupt:
-        out()                     # newline after the ^C
-        return ""                 # treat as empty line; outer loop ignores
-
-
-async def read_user_message(interactive: bool) -> Optional[str]:
-    """One user 'message' = one line, OR a multi-line block delimited by '\"\"\"'.
-    Returns None on EOF."""
-    first = await read_line(C.bold(C.green("you> ")) if interactive else "")
-    if first is None:
-        return None
-    stripped = first.strip()
-    if stripped == '"""':
-        # Multi-line block: read until the closing """
-        lines = []
-        while True:
-            ln = await read_line(C.dim("... "))
-            if ln is None or ln.strip() == '"""':
-                break
-            lines.append(ln)
-        return "\n".join(lines)
-    return first
-
 
 # ---------------------------------------------------------------------------
 # Main
@@ -320,66 +286,65 @@ async def amain(args: argparse.Namespace) -> int:
                       f"  |  tools: {len(tools)}"))
             out(C.dim("type /help for commands, Ctrl-D to exit\n"))
 
-        while True:
-            msg = await read_user_message(interactive)
-            if msg is None:
-                if interactive:
-                    out()  # newline after Ctrl-D
-                return 0
-            if not msg.strip():
-                if interactive:
+        async with TUISession(interactive=interactive) as tui:
+            set_tui_session(tui)
+
+            while True:
+                msg = await tui.read_message()
+                if msg is None:
+                    if interactive:
+                        out()
+                    return 0
+                if not msg.strip():
                     continue
-                # piped blank line → skip it and keep reading (a multi-turn
-                # script may separate turns with blank lines). EOF (msg is None,
-                # handled above) is what ends a piped run.
-                continue
 
-            if msg.startswith("/"):
-                if interactive:
+                # Route reply to a paused background task (workflow, permission, etc.)
+                if await tui.dispatch_reply(msg):
+                    # Give the resumed task a few event-loop ticks to run before
+                    # we read the next user message.
+                    for _ in range(5):
+                        await asyncio.sleep(0)
+                    continue
+
+                if msg.startswith("/"):
+                    if interactive:
+                        try:
+                            _handled, follow_up = await handle_slash(msg, agent, state)
+                        except SystemExit:
+                            return 0
+                        if follow_up:
+                            msg = follow_up
+                        else:
+                            continue
+
+                # Run the LLM call as a background task so the input prompt
+                # stays live during streaming / tool calls.
+                async def _chat(msg: str = msg) -> None:
                     try:
-                        _handled, follow_up = await handle_slash(msg, agent, state)
-                    except SystemExit:
-                        return 0
-                    # Lazy-tool triggers (e.g. /workflow) return a follow-up
-                    # prompt that should be dispatched as a normal chat
-                    # message — the freshly registered tool will be on the
-                    # registry by the time the provider call happens.
-                    if follow_up:
-                        msg = follow_up
-                    else:
-                        continue
-                # In piped mode, slash commands aren't meaningful; treat as text.
+                        if state.stream:
+                            await run_streaming(agent, msg, state)
+                        else:
+                            await run_blocking(agent, msg, state)
+                    except KeyboardInterrupt:
+                        out()
+                        out(C.yellow("(interrupted)"))
+                        return
+                    except Exception as e:
+                        # Without this, an unhandled error in the bg task dies
+                        # silently (asyncio only logs it at GC time) and the
+                        # user sees no output at all — looks like a hang.
+                        out()
+                        out(C.red(f"[error] {type(e).__name__}: {e}"))
+                        return
+                    out(C.dim(
+                        f"[usage] llm_calls={provider.usage_llm_calls} "
+                        f"input_tokens={provider.usage_input_tokens} "
+                        f"output_tokens={provider.usage_output_tokens} "
+                        f"cache_read={provider.usage_cache_read_tokens} "
+                        f"cache_write={provider.usage_cache_write_tokens}"
+                    ))
 
-            try:
-                if state.stream:
-                    await run_streaming(agent, msg, state)
-                else:
-                    await run_blocking(agent, msg, state)
-            except KeyboardInterrupt:
-                out()
-                out(C.yellow("(interrupted)"))
-                # session keeps going
-
-            # Session-cumulative REAL token usage, one machine-parseable line
-            # per turn (the last one wins for whole-run totals). Counted at the
-            # provider level so Layer-B normalization / workflow-indexer calls
-            # are included. Color auto-disables when piped, so downstream
-            # harnesses can parse the plain text. input_tokens is the TOTAL
-            # prompt size; the cache counters break out the portion served
-            # from / written to the prompt cache (billed at vendor discounts).
-            out(C.dim(
-                f"[usage] llm_calls={provider.usage_llm_calls} "
-                f"input_tokens={provider.usage_input_tokens} "
-                f"output_tokens={provider.usage_output_tokens} "
-                f"cache_read_tokens={provider.usage_cache_read_tokens} "
-                f"cache_write_tokens={provider.usage_cache_write_tokens}"
-            ))
-
-            # Piped mode used to stop after one message. Instead, keep reading:
-            # each subsequent stdin line is the next turn of a scripted
-            # multi-turn run, sharing this process's in-memory session (so the
-            # workflow / conversation state carries across turns). The loop ends
-            # at EOF (read_user_message returns None, handled at the top).
+                tui.submit(_chat())
 
 
 def main() -> None:

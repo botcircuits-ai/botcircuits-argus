@@ -50,11 +50,39 @@ def warn(title: str, lines: list[str]) -> None:
     sys.stderr.flush()
 
 
-async def confirm(title: str, lines: list[str], prompt: str = "run? [y/N]: ") -> bool:
-    """Prompt on stderr, read y/N from stdin in an executor so the event
-    loop keeps spinning. Default is deny (Enter / anything not y/yes)."""
-    sys.stderr.write(_format_block(title, lines))
-    sys.stderr.write(color("33", f"      {prompt}"))
+async def confirm(title: str, lines: list[str], prompt: str = "run? [y/N]: ",
+                  workflow_bg=None) -> bool:
+    """Prompt on stderr, read y/N from the user. Default is deny.
+
+    Routing priority:
+    1. `workflow_bg` set → background workflow channel (WorkflowTask.pause).
+    2. Active TUISession → TUISession.pause() so the y/N question rides
+       the prompt_toolkit input prompt instead of fighting it for stdin.
+    3. Plain terminal (no TUI) → write to stderr + read via executor.
+
+    Rules 1 and 2 both ultimately call TUISession.pause() — keeping a
+    single stdin reader so prompt_toolkit and raw input() never compete.
+    """
+    question = _format_block(title, lines).rstrip() + f"\n      {prompt}"
+
+    if workflow_bg is not None:
+        answer = await workflow_bg.pause(question)
+        return answer.strip().lower() in ("y", "yes")
+
+    # Route through TUISession when active — raw input() inside a
+    # run_in_executor competes with prompt_toolkit for stdin bytes and
+    # hangs the terminal after the user types their answer.
+    try:
+        from botcircuits.cli.tui import get_tui_session
+        tui = get_tui_session()
+    except ImportError:
+        tui = None
+
+    if tui is not None:
+        answer = await tui.pause(question)
+        return answer.strip().lower() in ("y", "yes")
+
+    sys.stderr.write(question)
     sys.stderr.flush()
     loop = asyncio.get_running_loop()
     try:

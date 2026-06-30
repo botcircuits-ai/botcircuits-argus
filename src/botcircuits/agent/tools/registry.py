@@ -86,10 +86,12 @@ class ToolRegistry:
                 True,
             )
         if decision == Decision.ASK:
+            workflow_bg = (context or {}).get("_workflow_bg")
             allowed = await _confirm.confirm(
                 f"{name} requires approval (permission rule):",
                 [f"args: {json.dumps(args or {}, default=str)}"],
                 prompt="allow? [y/N]: ",
+                workflow_bg=workflow_bg,
             )
             if not allowed:
                 return (

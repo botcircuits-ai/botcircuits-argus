@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from typing import TYPE_CHECKING, Any, Optional
@@ -11,8 +12,6 @@ from botcircuits.agent.workflow.cli_commands import (
     WORKFLOW_USAGE,
     compose_add_prompt,
     compose_edit_prompt,
-    compose_forced_run_follow_up,
-    compose_forced_run_kickoff,
     locate_workflow_for_edit,
     parse_workflow_command,
 )
@@ -271,21 +270,21 @@ async def _handle_workflow_run(
     target: str,
     initial_args: dict,
 ) -> Optional[str]:
-    """Force-start the named workflow tool, bypassing model tool choice.
+    """Force-start the named workflow tool as a background task.
 
-    `target` + `initial_args` come from the shared parser in
-    `botcircuits.agent.workflow.cli_commands`. This function focuses on
-    the BotCircuits-specific work: refresh the in-process workflow
-    registry, invoke the matching tool, and seed the conversation with
-    a synthetic tool_call/tool_result pair so the next LLM turn sees
-    the workflow step as if the model had called the tool itself.
-    Returns a short continuation prompt the caller dispatches as a
-    normal chat message — the workflow reminder in the system prompt
-    then drives the loop.
+    The engine runs in a background asyncio task so the CLI returns to
+    the `you>` prompt immediately.  When the engine hits a pause point
+    (human_feedback, permission request) the background task blocks on a
+    channel; the main loop surfaces the question and routes the reply back
+    so the engine continues without restarting.
+
+    Returns None (no follow-up prompt needed — the background task drives
+    itself) or an error message on setup failure.
     """
+    from ..cli.workflow_bg import REGISTRY, WorkflowTask
+
     # Re-discover workflow tools so a freshly authored workflow doesn't
-    # require a CLI restart. Existing workflow tools get re-bound to the
-    # latest on-disk record; collisions with built-ins are left alone.
+    # require a CLI restart.
     try:
         from ..agent.workflow import register_workflows
         await register_workflows(agent.tools, provider=agent.provider)
@@ -307,67 +306,46 @@ async def _handle_workflow_run(
         out(C.red(f"[workflow run] no workflow named {target!r}.{suffix}"))
         return None
 
-    out(C.dim(
-        f"(force-running workflow {target!r} "
-        f"with initial args: {json.dumps(initial_args)})"
-    ))
-
     convo = agent.store.get_or_create(state.session_id, system=state.system)
     state.session_id = convo.session_id
 
-    ctx = {
-        "last_assistant_message": "",
-        "last_user_message": "",
-        "session_id": convo.session_id,
-    }
-    try:
-        text, is_error = await agent.tools.run(target, initial_args, ctx)
-    except Exception as e:
-        out(C.red(
-            f"[workflow run] tool invocation failed: "
-            f"{type(e).__name__}: {e}"
-        ))
-        return None
+    # Create the background task carrier and register it before launching
+    # so the main loop can find it the moment the first pause fires.
+    wt = WorkflowTask(name=target, session_id=convo.session_id)
+    REGISTRY.add(wt)
 
-    color = C.red if is_error else C.green
-    label = "error" if is_error else "result"
-    out(color(f"  ◂ {label}      ") + (text or "(empty)"))
-
-    # Seed the conversation with the forced call so the LLM's next turn
-    # sees the workflow step as if it had been the one to invoke the
-    # tool. We bracket it with a user "kickoff" message + synthetic
-    # assistant tool_call + user tool_result so the provider gets a
-    # well-formed turn order. Kickoff/follow-up wording is shared with
-    # the Hermes adapter via `cli_commands`.
-    call_id = f"force-{uuid.uuid4().hex[:12]}"
-    convo.messages.append(Message(
-        role="user",
-        blocks=[{
-            "type": "text",
-            "text": compose_forced_run_kickoff(target, initial_args),
-        }],
-    ))
-    convo.messages.append(Message(
-        role="assistant",
-        blocks=[{
-            "type": "tool_call",
-            "id": call_id,
-            "name": target,
-            "arguments": initial_args,
-        }],
-    ))
-    convo.messages.append(Message(
-        role="user",
-        blocks=[{
-            "type": "tool_result",
-            "tool_call_id": call_id,
-            "name": target,
-            "content": text,
-            "is_error": is_error,
-        }],
+    out(C.dim(
+        f"(running workflow {target!r} in background"
+        f"{' with args: ' + json.dumps(initial_args) if initial_args else ''})"
     ))
 
-    return compose_forced_run_follow_up(target)
+    async def _bg_run() -> None:
+        ctx = {
+            "last_assistant_message": "",
+            "last_user_message": "",
+            "session_id": convo.session_id,
+            "run_segment": agent._make_segment_runner(workflow_bg=wt),
+        }
+        try:
+            text, is_error = await agent.tools.run(target, initial_args, ctx)
+            wt.summary = text
+            if is_error:
+                wt.error = text
+                out(C.red(f"\n[workflow {target!r}] error: {text}"))
+            else:
+                out(C.green(f"\n[workflow {target!r}] done: ")
+                    + (text or "(no summary)"))
+        except Exception as e:
+            wt.error = f"{type(e).__name__}: {e}"
+            out(C.red(f"\n[workflow {target!r}] failed: {wt.error}"))
+        finally:
+            wt.done = True
+            REGISTRY.remove(wt.session_id)
+
+    wt.task = asyncio.ensure_future(_bg_run())
+    # Return None — no follow-up prompt; the background task drives itself
+    # and surfaces pause questions through the main loop's pending_pause check.
+    return None
 
 
 def _load_tool(agent: "Agent", tool_name: str) -> None:

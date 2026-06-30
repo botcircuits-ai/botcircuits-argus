@@ -204,10 +204,23 @@ def build_segment_user_message(
     system_notes: list[str],
     item_variables: list[dict] | None = None,
     data_variables: list[dict] | None = None,
+    slots: dict | None = None,
 ) -> str:
     """The per-segment variable payload that rides AFTER the cached system
     prefix. Terse by design — the engine holds all the state."""
     parts: list[str] = []
+    # Expose filled slot values so the model knows what's already available
+    # and doesn't call human_feedback to re-ask for values it already has.
+    visible_slots = {
+        k: v for k, v in (slots or {}).items()
+        if not k.startswith("__") and v not in (None, "")
+    }
+    if visible_slots:
+        parts.append(
+            "Current workflow variables (already collected — do NOT ask "
+            "the user for these again):\n"
+            + json.dumps(visible_slots, ensure_ascii=False)
+        )
     if system_notes:
         parts.append("Engine notes:\n" + "\n".join(f"- {n}" for n in system_notes))
     if actions:

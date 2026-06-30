@@ -52,7 +52,17 @@ class Spinner:
     def __init__(self, interval: float = 0.08) -> None:
         self._interval = interval
         self._task: asyncio.Task | None = None
-        self._active = C._on and sys.stdout.isatty()
+        # Raw \r writes here bypass prompt_toolkit's patch_stdout cursor
+        # tracking and corrupt/hide the pinned input prompt + concurrent
+        # background-task output. Disable whenever a TUISession is driving
+        # the terminal — its prompt redraw already signals liveness.
+        tui_active = False
+        try:
+            from botcircuits.cli.tui import get_tui_session
+            tui_active = get_tui_session() is not None
+        except ImportError:
+            pass
+        self._active = C._on and sys.stdout.isatty() and not tui_active
 
     async def _spin(self) -> None:
         i = 0

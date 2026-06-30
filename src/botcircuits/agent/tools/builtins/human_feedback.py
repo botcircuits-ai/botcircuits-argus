@@ -5,12 +5,19 @@ needs the human's input) routes through this tool. Unlike every other
 builtin, its job isn't to *do* something and report back — it's to
 surface a question to the user and hand control back to them.
 
-The handler itself is a thin echo: it returns the question text tagged
+Normal (foreground) mode: the handler returns the question text tagged
 so the agent loop can recognize it. The actual "pause" is enforced in
 the loop (`Agent`), which treats a `human_feedback` call as a terminal
 turn — it surfaces the question as the assistant's reply and stops,
 rather than auto-recalling the workflow. The user's next chat message
 becomes the answer and resumes the run.
+
+Background mode: when the tool's context carries a `_workflow_bg`
+`WorkflowTask` object, the handler instead calls `wt.pause(question)`,
+which blocks the background coroutine on an asyncio queue.  The main
+CLI loop drains that queue, shows the question to the user, and sends
+the reply back via `wt.reply(answer)`.  The coroutine then resumes with
+the answer as the return value, which the engine seeds into slots.
 
 The tool name uses an underscore (`human_feedback`) so it satisfies
 every provider's tool-name regex.
@@ -26,12 +33,23 @@ HUMAN_FEEDBACK_TOOL = "human_feedback"
 
 
 def human_feedback_tool() -> LocalTool:
-    def _human_feedback(args: dict) -> dict:
+    async def _human_feedback(args: dict, context: dict | None = None) -> dict:
         question = (args or {}).get("question") or ""
         question = question.strip() if isinstance(question, str) else str(question)
-        # The text is echoed back so the loop can render it as the
-        # assistant's reply. `paused` is the flag the loop keys off; the
-        # tool result itself never re-enters the model (the turn ends).
+
+        # Background mode: block the bg task on the channel and await the
+        # user's reply.  The reply is returned so the segment can record it
+        # as the answer to this question step without needing another
+        # provider round-trip.
+        wt = (context or {}).get("_workflow_bg")
+        if wt is not None:
+            answer = await wt.pause(question)
+            # Return the answer directly so the engine can slot it in.
+            # The "paused" flag is intentionally absent — we are NOT
+            # pausing the agent loop; we only paused the bg coroutine.
+            return {"answer": answer, "question": question}
+
+        # Foreground (normal) mode: echo back so the loop pauses the turn.
         return {"paused": True, "question": question}
 
     return LocalTool(

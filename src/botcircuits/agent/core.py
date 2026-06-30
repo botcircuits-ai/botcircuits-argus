@@ -407,6 +407,7 @@ class Agent:
         item_variables: list[dict] | None = None,
         data_variables: list[dict] | None = None,
         event_sink=None,
+        workflow_bg=None,
     ) -> SegmentResult:
         """Run ONE branch-delimited segment: a constant-size cached system
         prompt + the segment payload, looped over provider calls until the
@@ -447,6 +448,7 @@ class Agent:
             actions, branch_variables, system_notes,
             item_variables=item_variables,
             data_variables=data_variables,
+            slots=slots,
         )
         messages: list[Message] = [
             Message(role="user", blocks=[{"type": "text", "text": user_msg}]),
@@ -501,12 +503,14 @@ class Agent:
                     out, err = await self.tools_run_synthetic(record_item_list, tc)
                     recorded_items = True
                 elif tc.name == HUMAN_FEEDBACK_TOOL:
-                    out, err = await self.tools.run(tc.name, tc.arguments, None)
+                    hf_ctx = {"_workflow_bg": workflow_bg} if workflow_bg is not None else None
+                    out, err = await self.tools.run(tc.name, tc.arguments, hf_ctx)
                     paused_question = _human_feedback_pause([tc], [(out, err)])
                 else:
-                    out, err = await self.tools.run(tc.name, tc.arguments, {
-                        "session_id": None,
-                    })
+                    tool_ctx: dict = {"session_id": None}
+                    if workflow_bg is not None:
+                        tool_ctx["_workflow_bg"] = workflow_bg
+                    out, err = await self.tools.run(tc.name, tc.arguments, tool_ctx)
                 results.append((out, err))
                 if event_sink is not None:
                     await event_sink("tool_result", (tc, out, err))
@@ -534,13 +538,18 @@ class Agent:
             captured_items=list(item_sink.get("items", [])),
         )
 
-    def _make_segment_runner(self, event_sink=None):
+    def _make_segment_runner(self, event_sink=None, workflow_bg=None):
         """A `run_segment` callable for the tool context, bound to this
         agent. Engine-disabled agents return None so the workflow tool falls
         back to its legacy per-step path.
 
         `event_sink`, when given (streaming path), forwards segment events
         so the UI stays live during an engine-driven workflow.
+
+        `workflow_bg`, when given, is a `WorkflowTask` whose channel the
+        `human_feedback` tool uses to block the background coroutine and
+        await the user's reply on the main thread instead of returning a
+        `paused` signal up the stack.
         """
         if not self.enable_workflows:
             return None
@@ -555,6 +564,7 @@ class Agent:
                 item_variables=item_variables,
                 data_variables=data_variables,
                 event_sink=event_sink,
+                workflow_bg=workflow_bg,
             )
         return _runner
 
