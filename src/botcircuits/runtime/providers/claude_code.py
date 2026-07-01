@@ -91,21 +91,50 @@ def _resolve_tier2_prompt(
     )
 
 
+#: The CLI flag each host uses to pin a specific model on ONE invocation.
+#: `claude` (claude-code) takes `--model`; `codex exec` takes `-m`/`--model` —
+#: verify against the installed CLI's own `--help` before relying on this in
+#: production, since these are maintained out-of-repo and can change.
+#: Unlisted runtime names (e.g. openclaw, until confirmed) fall back to
+#: `--model`, the most common convention among these CLIs.
+_MODEL_FLAG: dict[str, str] = {
+    "claude-code": "--model",
+    "codex": "-m",
+}
+
+
 class ClaudeCodeRuntime(AgentRuntimeProvider):
     """Drive a workflow via a headless CLI agent, one process per segment."""
 
-    def __init__(self, config: RuntimeConfig):
+    def __init__(
+        self,
+        config: RuntimeConfig,
+        *,
+        agents_config: dict[str, dict] | None = None,
+    ):
         self.config = config
         self.name = config.name or "claude-code"
+        # Agent name -> {"model": "..."} for agents routed to THIS runtime
+        # instance. A segment pinned to one of these gets `--model <x>`
+        # appended to just that invocation's argv.
+        self.agents_config = agents_config or {}
 
-    def _command(self) -> list[str]:
+    def _command(self, *, model: str | None = None) -> list[str]:
         """The spawn argv template, with any run-granted tools appended as
         ``--allowedTools <tool> …`` so a "yes, allow it" reply takes effect on
-        the very next segment without the user touching settings.json."""
+        the very next segment without the user touching settings.json.
+
+        `model`, when given, appends this runtime's model flag (see
+        `_MODEL_FLAG`) so JUST this invocation targets a different model —
+        the per-agent override, resolved per call rather than baked into
+        `self.config` so one instance serves every agent on this runtime."""
         cmd = list(self.config.command)
         tools = [t for t in (self.config.allowed_tools or []) if t]
         if tools:
             cmd += ["--allowedTools", *tools]
+        if model:
+            flag = _MODEL_FLAG.get(self.name, "--model")
+            cmd += [flag, model]
         return cmd
 
     # -- segment execution --------------------------------------------------
@@ -203,12 +232,15 @@ class ClaudeCodeRuntime(AgentRuntimeProvider):
         slots: dict[str, Any],
         item_variables: list[dict] | None = None,
         data_variables: list[dict] | None = None,
+        agent: str | None = None,
         event_sink: EventSink | None = None,
     ) -> SegmentResult:
         """Run one segment by invoking the host CLI once.
 
-        `event_sink` is ignored — headless one-shot mode has no incremental
-        events to stream; the host shows its own progress.
+        `agent`, when it names one of `self.agents_config`, pins JUST this
+        invocation to that agent's model via the runtime's model flag (see
+        `_MODEL_FLAG`). `event_sink` is ignored — headless one-shot mode has
+        no incremental events to stream; the host shows its own progress.
         """
         prompt = self._build_segment_prompt(
             actions=actions,
@@ -219,10 +251,11 @@ class ClaudeCodeRuntime(AgentRuntimeProvider):
             data_variables=data_variables,
         )
         launched_at = time.time()
+        model = self.agents_config.get(agent, {}).get("model") if agent else None
 
         try:
             res = await run_cli(
-                self._command(), prompt, timeout=self.config.timeout,
+                self._command(model=model), prompt, timeout=self.config.timeout,
                 cwd=self.config.cwd,
             )
         except CliExecError as e:

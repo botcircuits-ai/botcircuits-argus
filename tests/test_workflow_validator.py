@@ -135,3 +135,53 @@ def test_no_basedir_skips_file_checks(tmp_path):
     doc["flow"]["steps"]["process"]["itemSource"]["path"] = "line_items"
     issues = static_issues(doc, base_dir=None)
     assert not any("not a list" in i for i in issues)
+
+
+def test_unknown_agent_reference_flagged(tmp_path):
+    _ws(tmp_path)
+    doc = _good(tmp_path)
+    doc["flow"]["steps"]["process"]["agent"] = "researcher"
+    issues = static_issues(doc, base_dir=tmp_path)
+    assert any("unknown agent 'researcher'" in i for i in issues)
+
+
+def test_declared_agent_reference_not_flagged(tmp_path):
+    _ws(tmp_path)
+    doc = _good(tmp_path)
+    doc["agents"] = {"researcher": {"model": "claude-haiku-4-5"}}
+    doc["flow"]["steps"]["process"]["agent"] = "researcher"
+    issues = static_issues(doc, base_dir=tmp_path)
+    assert not any("unknown agent" in i for i in issues)
+
+
+def test_unknown_agent_runtime_flagged(tmp_path):
+    _ws(tmp_path)
+    doc = _good(tmp_path)
+    doc["agents"] = {"researcher": {"runtime": "claude-cod"}}  # typo
+    issues = static_issues(doc, base_dir=tmp_path)
+    assert any("runtime" in i and "claude-cod" in i for i in issues)
+
+
+def test_unknown_agent_provider_flagged(tmp_path):
+    _ws(tmp_path)
+    doc = _good(tmp_path)
+    doc["agents"] = {"researcher": {"provider": "openia"}}  # typo
+    issues = static_issues(doc, base_dir=tmp_path)
+    assert any("provider" in i and "openia" in i for i in issues)
+
+
+def test_valid_agent_runtime_and_provider_not_flagged(tmp_path):
+    _ws(tmp_path)
+    doc = _good(tmp_path)
+    doc["agents"] = {"researcher": {"runtime": "codex", "provider": "openai",
+                                     "model": "gpt-4.1"}}
+    issues = static_issues(doc, base_dir=tmp_path)
+    assert not any("runtime" in i or "provider" in i for i in issues)
+
+
+def test_agent_pinned_to_self_runtime_flagged(tmp_path):
+    _ws(tmp_path)
+    doc = _good(tmp_path)
+    doc["agents"] = {"researcher": {"runtime": "self"}}
+    issues = static_issues(doc, base_dir=tmp_path)
+    assert any("runtime is 'self'" in i for i in issues)

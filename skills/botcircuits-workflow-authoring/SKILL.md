@@ -114,6 +114,38 @@ Rules:
 - A branching step needs BOTH `conditions` (real branches) AND `next`
   (default). A step with neither is terminal.
 
+## Pinning a step to a different model (optional, rarely needed)
+
+Every step runs on the run's default model unless you say otherwise. Only
+reach for this when a step genuinely benefits from a different model — a
+cheap/fast model for a trivial extraction step, a stronger model for a hard
+planning/judgment step, or (for `claude-code`/`codex` runtimes) routing a step
+to a different subscription CLI entirely. Most workflows don't need this —
+don't add it just because it's available.
+
+Declare a top-level `agents` map (name → `{runtime?, model?}`) and reference
+a name from any step's `agent` field:
+
+```json
+{
+  "agents": {
+    "researcher": { "runtime": "codex", "model": "o3" },
+    "writer":     { "model": "claude-opus-4-7" }
+  },
+  "flow": {
+    "steps": {
+      "fetch_trends": { "type": "agentAction", "agent": "researcher", "settings": {...} },
+      "write_report": { "type": "agentAction", "agent": "writer", "settings": {...} }
+    }
+  }
+}
+```
+
+`runtime` is optional (omit it to stay on the run's own host CLI/model and
+just override `model`). Every `agent` value MUST have a matching entry in the
+top-level `agents` map — `botcircuits workflow build` flags an unknown
+reference as a validation issue.
+
 ## Iterating over a list — use `listDecision`, NOT a self-loop
 
 When the process applies the **same decision to every item in a collection**
