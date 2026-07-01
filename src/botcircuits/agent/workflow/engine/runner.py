@@ -124,6 +124,7 @@ class SegmentRunner(Protocol):
         slots: dict[str, Any],
         item_variables: list[dict] | None = None,
         data_variables: list[dict] | None = None,
+        agent: str | None = None,
     ) -> SegmentResult: ...
 
 
@@ -348,10 +349,12 @@ async def run_workflow_engine(
 
     run_usage = RunUsage()
 
-    def _account(seg: "SegmentResult", step_id: str | None) -> None:
+    def _account(seg: "SegmentResult", step_id: str | None, agent: str | None = None) -> None:
         u = getattr(seg, "usage", None)
         if u is not None and not u.step:
             u.step = step_id or ""
+        if u is not None and agent and not getattr(u, "agent", ""):
+            u.agent = agent
         run_usage.add(u)
 
     # S4 — resolve every `flow.variables` entry that carries a deterministic
@@ -476,14 +479,22 @@ async def run_workflow_engine(
                 continue
 
             item_vars = branch_step.get("itemVariables") or []
+            # Pass `agent` only when the segment is pinned to one, so simple
+            # SegmentRunner callables (and tests) that don't accept the kwarg
+            # keep working — same rationale as `data_variables` below.
+            seg_kwargs: dict[str, Any] = {}
+            segment_agent = current.get("agent")
+            if segment_agent:
+                seg_kwargs["agent"] = segment_agent
             seg = await run_segment(
                 actions=actions,
                 branch_variables=[],
                 system_notes=[],
                 slots=slots,
                 item_variables=item_vars,
+                **seg_kwargs,
             )
-            _account(seg, current.get("id"))
+            _account(seg, current.get("id"), segment_agent)
             if seg.paused:
                 return EngineResult(
                     paused=True, question=seg.question,
@@ -504,12 +515,16 @@ async def run_workflow_engine(
             current = by_id.get(nxt) if nxt else None
             continue
 
-        # Pass `data_variables` only when present so simple SegmentRunner
-        # callables (and tests) that don't accept the kwarg keep working —
-        # mirrors how `item_variables` is passed only on the listDecision path.
+        # Pass `data_variables`/`agent` only when present so simple
+        # SegmentRunner callables (and tests) that don't accept the kwarg
+        # keep working — mirrors how `item_variables` is passed only on the
+        # listDecision path.
         seg_kwargs: dict[str, Any] = {}
         if data_variables:
             seg_kwargs["data_variables"] = data_variables
+        segment_agent = current.get("agent")
+        if segment_agent:
+            seg_kwargs["agent"] = segment_agent
         seg = await run_segment(
             actions=actions,
             branch_variables=branch_variables,
@@ -517,7 +532,7 @@ async def run_workflow_engine(
             slots=slots,
             **seg_kwargs,
         )
-        _account(seg, current.get("id"))
+        _account(seg, current.get("id"), segment_agent)
         last_text = seg.text or last_text
 
         # User-interaction pause: yield control so the user can reply. The

@@ -6,6 +6,7 @@ Endpoints (all JSON):
     GET  /api/sessions          -> [session summary, ...]      (auth)
     GET  /api/sessions/{id}     -> full session document       (auth)
     GET  /api/health            -> {status, auth_configured}
+    GET  /api/models            -> {provider: {label, models}} (auth)
 
 Auth is a bearer token from /api/auth/login (see ``auth``). CORS is open by
 default for local dev so the Next.js manager web (a different port) can call
@@ -24,6 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from botcircuits.cli.setup import PROVIDER_CATALOG
 from botcircuits.manager import auth, store
 from botcircuits.manager import authoring, workflows as wf_store
 
@@ -78,6 +80,18 @@ def create_app() -> FastAPI:
     @app.get("/api/health")
     def health() -> dict:
         return {"status": "ok", "auth_configured": auth.is_configured()}
+
+    @app.get("/api/models")
+    def list_models(_user: str = Depends(_require_user)) -> dict:
+        """Curated model list per native provider, keyed by provider name —
+        the same catalog `botcircuits setup` offers, reused so the dashboard's
+        model picker isn't a blind free-text field. `models` is a "good
+        default" shortlist, not exhaustive; the UI still accepts a typed
+        model name outside this list."""
+        return {
+            name: {"label": spec["label"], "models": spec["models"]}
+            for name, spec in PROVIDER_CATALOG.items()
+        }
 
     @app.post("/api/auth/login", response_model=LoginResponse)
     def login(body: LoginRequest) -> LoginResponse:

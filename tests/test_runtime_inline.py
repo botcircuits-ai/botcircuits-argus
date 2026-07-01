@@ -115,6 +115,21 @@ def test_seed_advances_and_routes_branch():
     assert r3.slots.get("approved") is True
 
 
+def test_run_segment_warns_once_when_agent_pin_is_ignored(capsys):
+    rt = InlineRuntime()
+    asyncio.run(rt.run_segment(
+        actions=["x"], branch_variables=[], system_notes=[], slots={},
+        agent="researcher",
+    ))
+    asyncio.run(rt.run_segment(
+        actions=["y"], branch_variables=[], system_notes=[], slots={},
+        agent="researcher",
+    ))
+    err = capsys.readouterr().err
+    assert err.count("researcher") == 1
+    assert "no per-agent overrides" in err
+
+
 def test_resolve_slots_is_deterministic_tier0_only():
     rt = InlineRuntime()
     flow = {

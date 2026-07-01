@@ -116,6 +116,10 @@ export type WorkflowStep = {
   next?: string | null;
   settings?: { action?: string; [k: string]: unknown };
   conditions?: WorkflowCondition[];
+  /** Name of an entry in the workflow's top-level `agents` map — pins this
+   * step to a different model/runtime than the run's default. Omitted (or
+   * unset) means the run default. */
+  agent?: string;
   [k: string]: unknown;
 };
 
@@ -125,12 +129,34 @@ export type WorkflowFlow = {
   [k: string]: unknown;
 };
 
+/** Runtimes a named agent can be routed to. `undefined` means "the run's own
+ * runtime" — only the model differs. Mirrors the backend's per-agent support
+ * (`select_runtime` in `runtime/detect.py`): claude-code/codex/openclaw share
+ * `ClaudeCodeRuntime` and honor `agents_config`; native has its own
+ * `agents_config` path. Hermes is NOT listed — per-agent overrides aren't
+ * threaded to it yet (see `select_runtime`'s hermes branch). */
+export const AGENT_RUNTIMES = ["", "claude-code", "codex", "openclaw", "native"] as const;
+
+/** One named agent's model/runtime override (top-level `agents.<name>`). */
+export type AgentConfig = {
+  runtime?: string;
+  provider?: string;
+  model?: string;
+};
+
+/** Curated model shortlist per native provider (`GET /api/models`) — the same
+ * catalog `botcircuits setup` offers. Not exhaustive; the UI still accepts a
+ * typed model name outside this list. */
+export type ModelCatalog = Record<string, { label: string; models: string[] }>;
+
 /** A raw, human-authored workflow source document (the `.botcircuits/workflows`
  * file shape — steps nested under `flow`). */
 export type WorkflowDoc = {
   name?: string;
   description?: string;
   flow?: WorkflowFlow;
+  /** Named agent/model overrides a step can pin itself to via `step.agent`. */
+  agents?: Record<string, AgentConfig>;
   [k: string]: unknown;
 };
 
@@ -201,6 +227,8 @@ export const api = {
 
   listSessions: (token: string) =>
     request<SessionSummary[]>("/api/sessions", { token }),
+
+  listModels: (token: string) => request<ModelCatalog>("/api/models", { token }),
 
   getSession: (token: string, id: string) =>
     request<SessionDoc>(`/api/sessions/${encodeURIComponent(id)}`, { token }),

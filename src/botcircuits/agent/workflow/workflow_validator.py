@@ -118,6 +118,41 @@ def static_issues(doc: dict, *, base_dir: Path | None = None) -> list[str]:
         issues.append(f"`flow.start` ('{start}') is not a defined step.")
 
     declared = _declared_var_names(doc)
+    declared_agents = doc.get("agents")
+    declared_agents = declared_agents if isinstance(declared_agents, dict) else {}
+
+    # Valid `runtime`/`provider` values an `agents.<name>` entry may declare.
+    # Kept as a local literal (not imported from `botcircuits.runtime.detect` /
+    # `botcircuits.providers`) so this pure, no-LLM validator stays decoupled
+    # from the runtime layer; update alongside `_REGISTRY` / `make_provider`
+    # if either grows a new name.
+    _VALID_RUNTIMES = {"native", "self", "claude-code", "codex", "openclaw", "hermes"}
+    _VALID_PROVIDERS = {"anthropic", "openai", "gemini"}
+    for agent_name, cfg in declared_agents.items():
+        if not isinstance(cfg, dict):
+            issues.append(
+                f"agents.{agent_name} must be an object "
+                "({runtime?, provider?, model?}).")
+            continue
+        rt = cfg.get("runtime")
+        if isinstance(rt, str) and rt:
+            if rt not in _VALID_RUNTIMES:
+                issues.append(
+                    f"agents.{agent_name}.runtime '{rt}' is not a supported "
+                    f"runtime — use one of {sorted(_VALID_RUNTIMES)}.")
+            elif rt == "self":
+                # The inline/self runtime always hands segments to the HOST's
+                # own model (`InlineRuntime.run_segment` ignores `agent`
+                # entirely) — pinning an agent to it can never take effect.
+                issues.append(
+                    f"agents.{agent_name}.runtime is 'self' (inline) — the "
+                    "inline runtime always uses the host's own model and "
+                    "has no per-agent overrides; remove this override.")
+        provider = cfg.get("provider")
+        if isinstance(provider, str) and provider and provider not in _VALID_PROVIDERS:
+            issues.append(
+                f"agents.{agent_name}.provider '{provider}' is not a "
+                f"supported provider — use one of {sorted(_VALID_PROVIDERS)}.")
 
     def _check_file(rel: str, ctx: str) -> Any:
         if base_dir is None:
@@ -136,6 +171,15 @@ def static_issues(doc: dict, *, base_dir: Path | None = None) -> list[str]:
             continue
         stype = step.get("type")
         action = (step.get("settings") or {}).get("action", "")
+
+        # A step pinned to a named agent must have that name declared in the
+        # top-level `agents` map, or the reference is a typo/leftover that
+        # silently falls back to the run's default model.
+        step_agent = step.get("agent")
+        if isinstance(step_agent, str) and step_agent and step_agent not in declared_agents:
+            issues.append(
+                f"Step '{sid}' references unknown agent '{step_agent}' — add "
+                "it to the top-level `agents` map.")
 
         # A `question` step pauses for the user. If the data it asks about is on
         # disk, that's almost always wrong — flag it.

@@ -208,6 +208,76 @@ def test_no_allowed_tools_means_no_flag(tmp_path):
     assert "--allowedTools" not in res.text
 
 
+def test_agent_model_appended_to_spawn_argv(tmp_path):
+    # A step pinned to a named agent gets that agent's model flag appended to
+    # JUST this invocation, on top of any run-granted --allowedTools.
+    script = tmp_path / "echoargs3"
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys, json\n"
+        "print(json.dumps({'slots': {}, 'text': ' '.join(sys.argv[1:])}))\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    rt = ClaudeCodeRuntime(
+        RuntimeConfig(
+            name="claude-code",
+            command=[str(script), "-p", "{prompt}", "--output-format", "json"],
+            timeout=30.0,
+        ),
+        agents_config={"researcher": {"model": "claude-haiku-4-5"}},
+    )
+    res = asyncio.run(rt.run_segment(
+        actions=["search"], branch_variables=[], system_notes=[], slots={},
+        agent="researcher",
+    ))
+    assert "--model claude-haiku-4-5" in res.text
+
+
+def test_no_agent_means_no_model_flag(tmp_path):
+    script = tmp_path / "echoargs4"
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys, json\n"
+        "print(json.dumps({'slots': {}, 'text': ' '.join(sys.argv[1:])}))\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    rt = ClaudeCodeRuntime(
+        RuntimeConfig(
+            name="claude-code",
+            command=[str(script), "-p", "{prompt}", "--output-format", "json"],
+            timeout=30.0,
+        ),
+        agents_config={"researcher": {"model": "claude-haiku-4-5"}},
+    )
+    res = asyncio.run(rt.run_segment(
+        actions=["x"], branch_variables=[], system_notes=[], slots={},
+    ))
+    assert "--model" not in res.text
+
+
+def test_codex_agent_model_uses_dash_m_flag(tmp_path):
+    script = tmp_path / "echoargs5"
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys, json\n"
+        "print(json.dumps({'slots': {}, 'text': ' '.join(sys.argv[1:])}))\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    rt = ClaudeCodeRuntime(
+        RuntimeConfig(
+            name="codex",
+            command=[str(script), "exec", "{prompt}", "--json"],
+            timeout=30.0,
+        ),
+        agents_config={"reviewer": {"model": "o3"}},
+    )
+    res = asyncio.run(rt.run_segment(
+        actions=["review"], branch_variables=[], system_notes=[], slots={},
+        agent="reviewer",
+    ))
+    assert "-m o3" in res.text
+
+
 def test_data_variable_reported_slot_is_captured(tmp_path):
     # The CLI contract carries ANY reported slot key, so a non-branch data
     # variable (e.g. scraped_jobs) survives the process hop into slots.

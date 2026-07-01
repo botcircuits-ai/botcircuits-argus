@@ -460,11 +460,17 @@ class Agent:
         slots: dict,
         item_variables: list[dict] | None = None,
         data_variables: list[dict] | None = None,
+        provider: LLMProvider | None = None,
         event_sink=None,
     ) -> SegmentResult:
         """Run ONE branch-delimited segment: a constant-size cached system
         prompt + the segment payload, looped over provider calls until the
         model stops asking for tools (or pauses for the user).
+
+        `provider`, when given, overrides `self.provider` for JUST this
+        segment's calls — the per-agent model resolved by `NativeRuntime`
+        for a step pinned to a different agent than the run's default.
+        `None` (the common case) uses `self.provider` as before.
 
         Returns the captured branch slots (via the synthetic `record_slots`
         tool, Tier 1), the final assistant text, and a pause flag when the
@@ -506,10 +512,12 @@ class Agent:
             Message(role="user", blocks=[{"type": "text", "text": user_msg}]),
         ]
 
+        active_provider = provider or self.provider
+
         final_text = ""
         for _ in range(_MAX_SEGMENT_TURNS):
-            self.provider.usage_purpose = "segment"
-            resp = await self.provider.complete(
+            active_provider.usage_purpose = "segment"
+            resp = await active_provider.complete(
                 system=ENGINE_SYSTEM_PROMPT,
                 messages=messages,
                 tools=engine_tools if self.mode != "react" else [],
