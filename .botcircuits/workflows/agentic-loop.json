@@ -1,0 +1,148 @@
+{
+    "name": "agentic-loop",
+    "description": "Agentic software development loop: task intake → planning with reviewer feedback iterations (max 5) → human approval → coding agents (frontend / backend / database) → code review with reiteration → documentation summary",
+    "flow": {
+        "start": "start",
+        "steps": {
+            "start": {
+                "type": "start",
+                "next": "collect_task"
+            },
+            "collect_task": {
+                "type": "question",
+                "settings": {
+                    "action": "Please describe the task you want implemented. Include: the feature or problem to solve, specific requirements, acceptance criteria, and relevant context (tech stack, constraints, etc.)."
+                },
+                "next": "init_state"
+            },
+            "init_state": {
+                "type": "systemAction",
+                "settings": {
+                    "action": "Initialize workflow state: set review_iteration to 0, set code_review_iteration to 0, set has_feedback to true, set code_approved to false."
+                },
+                "next": "planning_agent"
+            },
+            "planning_agent": {
+                "type": "agentAction",
+                "settings": {
+                    "action": "You are a planning agent. Using the original task details and any reviewer feedback from prior iterations, create or update an implementation plan document with these sections: 1) Executive Summary, 2) Task Breakdown — subtasks with assigned owners (frontend / backend / database), 3) Acceptance Criteria — specific, testable criteria, 4) Technical Approach — per-component design decisions, 5) Dependencies and Risks, 6) Revision History — append a dated entry for each review cycle noting changes made. Output the full updated plan document."
+                },
+                "next": "plan_reviewer"
+            },
+            "plan_reviewer": {
+                "type": "agentAction",
+                "settings": {
+                    "action": "You are a plan reviewer agent. Increment review_iteration by 1. Carefully review the implementation plan against the original task requirements. Evaluate: completeness, technical feasibility, correctness of acceptance criteria, coverage of edge cases, and clarity of task breakdown. If the plan is fully satisfactory and requires no further changes, set has_feedback to false. Otherwise set has_feedback to true and append specific, actionable feedback items to the plan's Revision History section, detailing exactly what must be improved."
+                },
+                "conditions": [
+                    {
+                        "condition": "has_feedback is false",
+                        "next": "human_approval"
+                    },
+                    {
+                        "condition": "review_iteration equals 5",
+                        "next": "human_approval"
+                    },
+                    {
+                        "condition": "review_iteration exceeds 5",
+                        "next": "human_approval"
+                    }
+                ],
+                "next": "planning_agent"
+            },
+            "human_approval": {
+                "type": "question",
+                "settings": {
+                    "action": "The implementation plan has been finalized and reviewed. Please review the plan document above (including revision history). Reply 'approve' to proceed with implementation, or 'reject' with your specific comments to revise the plan further."
+                },
+                "conditions": [
+                    {
+                        "condition": "human rejects the plan",
+                        "next": "reset_for_revision"
+                    },
+                    {
+                        "condition": "human requests changes to the plan",
+                        "next": "reset_for_revision"
+                    }
+                ],
+                "next": "frontend_coding_agent"
+            },
+            "reset_for_revision": {
+                "type": "systemAction",
+                "settings": {
+                    "action": "Reset review_iteration to 0 and set has_feedback to true to allow a fresh planning and review cycle based on human feedback."
+                },
+                "next": "planning_agent"
+            },
+            "frontend_coding_agent": {
+                "type": "agentAction",
+                "settings": {
+                    "action": "You are a frontend coding agent specializing in UI and client-side logic. Based on the approved implementation plan, implement all frontend components: UI layouts, forms, client-side state management, API call integrations, and input validation. Follow the acceptance criteria from the plan precisely. Produce complete, working code files and document: what you built, which plan acceptance criteria you addressed, and any implementation decisions you made."
+                },
+                "next": "backend_coding_agent",
+                "agent": "claude-frontend"
+            },
+            "backend_coding_agent": {
+                "type": "agentAction",
+                "settings": {
+                    "action": "You are a backend coding agent specializing in server-side logic and APIs. Based on the approved implementation plan, implement all backend components: API endpoints, business logic services, authentication and authorization, input validation, and integrations with external systems. Follow the acceptance criteria from the plan precisely. Produce complete, working code files and document: what you built, which plan acceptance criteria you addressed, and any implementation decisions you made."
+                },
+                "next": "database_coding_agent",
+                "agent": "claude-backend"
+            },
+            "database_coding_agent": {
+                "type": "agentAction",
+                "settings": {
+                    "action": "You are a database coding agent specializing in data modeling and persistence. Based on the approved implementation plan, implement all database components: schema definitions, migrations, indexes, queries, and the data access layer. Follow the acceptance criteria from the plan precisely. Produce complete, working code files and document: what you built, which plan acceptance criteria you addressed, and any implementation decisions you made."
+                },
+                "next": "code_reviewer"
+            },
+            "code_reviewer": {
+                "type": "agentAction",
+                "settings": {
+                    "action": "You are a code reviewer agent. Increment code_review_iteration by 1. Review ALL code produced by the frontend, backend, and database agents against the implementation plan's acceptance criteria. Check for: correctness, completeness of each acceptance criterion, code quality and consistency, security issues, and proper integration between components. If every acceptance criterion is met and the code is production-ready, set code_approved to true. Otherwise set code_approved to false and produce a detailed review report specifying exactly which acceptance criteria are unmet and what each coding agent must fix."
+                },
+                "conditions": [
+                    {
+                        "condition": "code_approved is true",
+                        "next": "documentation_agent"
+                    },
+                    {
+                        "condition": "code_review_iteration equals 3",
+                        "next": "documentation_agent"
+                    },
+                    {
+                        "condition": "code_review_iteration exceeds 3",
+                        "next": "documentation_agent"
+                    }
+                ],
+                "next": "frontend_coding_agent",
+                "agent": "claude-code-review"
+            },
+            "documentation_agent": {
+                "type": "agentAction",
+                "settings": {
+                    "action": "You are a documentation agent. Write a comprehensive implementation summary document with these sections: 1) What Was Built — feature overview and all components delivered, 2) Architecture — how the frontend, backend, and database layers integrate, 3) Acceptance Criteria Checklist — confirm each criterion from the plan and its status (met / partially met / not met), 4) Setup and Deployment Instructions — step-by-step guide to run or deploy the implementation, 5) Code Review Summary — findings from the code review process and any known limitations, 6) Future Improvements — recommended follow-up work. Ground every statement in the approved plan and the actual code produced by the coding agents."
+                }
+            }
+        }
+    },
+    "agents": {
+        "claude-planning": {
+            "runtime": "claude-code",
+            "model": "sonnet-4.6"
+        },
+        "claude-frontend": {
+            "runtime": "claude-code",
+            "model": "sonnet-4.6"
+        },
+        "claude-backend": {
+            "runtime": "claude-code",
+            "model": "haiku-4.5"
+        },
+        "claude-code-review": {
+            "runtime": "claude-code",
+            "model": "sonnet-4.6"
+        }
+    }
+}
