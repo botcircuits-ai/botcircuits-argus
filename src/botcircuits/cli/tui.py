@@ -72,7 +72,9 @@ class TUISession:
         self._active_pause: Optional[tuple[str, asyncio.Future[str]]] = None
 
         # Normal prompt text and pause-override text.
-        self._normal_prompt = C.bold(C.green("you> ")) if interactive else ""
+        self._normal_prompt = (
+            C.dim("| > ") if interactive else ""
+        )
         self._current_prompt = self._normal_prompt
 
         # All submitted tasks.

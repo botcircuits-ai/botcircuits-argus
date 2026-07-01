@@ -279,12 +279,8 @@ async def amain(args: argparse.Namespace) -> int:
     ) as agent:
 
         if interactive:
-            tools = agent.tools.all()
-            out(C.dim(f"provider: {cfg.provider}"
-                      f"  |  model: {provider.model}"
-                      f"  |  streaming: {state.stream}"
-                      f"  |  tools: {len(tools)}"))
-            out(C.dim("type /help for commands, Ctrl-D to exit\n"))
+            from botcircuits.cli.banner import print_banner
+            print_banner(agent, provider, cfg)
 
         async with TUISession(interactive=interactive) as tui:
             set_tui_session(tui)
@@ -324,6 +320,8 @@ async def amain(args: argparse.Namespace) -> int:
                 # Run the LLM call as a background task so the input prompt
                 # stays live during streaming / tool calls.
                 async def _chat(msg: str = msg) -> None:
+                    import time as _time
+                    _t0 = _time.monotonic()
                     try:
                         if state.stream:
                             await run_streaming(agent, msg, state)
@@ -334,18 +332,15 @@ async def amain(args: argparse.Namespace) -> int:
                         out(C.yellow("(interrupted)"))
                         return
                     except Exception as e:
-                        # Without this, an unhandled error in the bg task dies
-                        # silently (asyncio only logs it at GC time) and the
-                        # user sees no output at all — looks like a hang.
                         out()
                         out(C.red(f"[error] {type(e).__name__}: {e}"))
                         return
+                    elapsed = _time.monotonic() - _t0
+                    total_tok = provider.usage_input_tokens + provider.usage_output_tokens
+                    tok_str = f"{total_tok / 1000:.1f}K" if total_tok >= 1000 else str(total_tok)
                     out(C.dim(
-                        f"[usage] llm_calls={provider.usage_llm_calls} "
-                        f"input_tokens={provider.usage_input_tokens} "
-                        f"output_tokens={provider.usage_output_tokens} "
-                        f"cache_read={provider.usage_cache_read_tokens} "
-                        f"cache_write={provider.usage_cache_write_tokens}"
+                        f"  {provider.model[:20]}  |  {tok_str}M tokens  "
+                        f"|  {elapsed:.0f}s  |  ⊙ {elapsed:.0f}s"
                     ))
 
                 tui.submit(_chat())

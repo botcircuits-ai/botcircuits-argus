@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING
 
 from botcircuits.cli.ansi import C, out
@@ -16,15 +17,39 @@ def preview(s: str, n: int = 200) -> str:
     return s if len(s) <= n else s[:n] + "…"
 
 
+# Emoji icons for known tool name prefixes (mirrors Hermes style)
+_TOOL_ICONS: dict[str, str] = {
+    "shell": "⚙",
+    "grep": "🔍",
+    "read": "📄",
+    "write": "✏️",
+    "edit": "✏️",
+    "search": "🔍",
+    "web": "🌐",
+    "http": "🌐",
+    "fetch": "🌐",
+    "skill": "🧩",
+    "workflow": "🔄",
+    "build": "🔨",
+    "plan": "📋",
+    "memory": "🧠",
+    "proc": "⚙",
+}
+
+
+def _tool_icon(name: str) -> str:
+    prefix = name.split("_")[0].lower()
+    return _TOOL_ICONS.get(prefix, "●")
+
+
 async def run_streaming(agent: "Agent", msg: str, state: "CLIState") -> None:
     saw_text = False
     sid = state.session_id
     last_was_text = False
-    # True when we need to print the "argus> " prefix before next text output.
     prefix_needed = True
-    # True when we've printed a "⋯ processing..." status after a tool result
-    # and haven't yet cleared it with real output.
     status_line = False
+    # Track per-tool-call start time for elapsed display
+    _tool_start: dict[str, float] = {}
 
     async for ev in agent.chat_stream(msg, session_id=sid, system=state.system):
         if ev.session_id and not state.session_id:
@@ -33,7 +58,6 @@ async def run_streaming(agent: "Agent", msg: str, state: "CLIState") -> None:
         if ev.type == "text_delta":
             if prefix_needed:
                 if status_line:
-                    # Clear the processing status before starting the answer.
                     out()
                     status_line = False
                 out(C.bold(C.cyan("argus> ")), end="")
@@ -50,8 +74,10 @@ async def run_streaming(agent: "Agent", msg: str, state: "CLIState") -> None:
                 out()
                 status_line = False
             tc = ev.tool_call
-            args_preview = preview(str(tc.arguments), 120)
-            out(C.magenta(f"  ▸ tool_call  {tc.name}({args_preview})"))
+            icon = _tool_icon(tc.name)
+            args_preview = preview(str(tc.arguments), 80)
+            _tool_start[tc.name] = time.monotonic()
+            out(C.dim(f"  | {icon} {tc.name:<12}  {args_preview}"))
             prefix_needed = True
 
         elif ev.type == "tool_result":
@@ -59,7 +85,6 @@ async def run_streaming(agent: "Agent", msg: str, state: "CLIState") -> None:
             label = "error" if ev.is_error else "result"
             shown = ev.text if state.show_tool_results else preview(ev.text or "", 200)
             out(col(f"  ◂ {label}      ") + (shown or "(empty)"))
-            # Show a dim status so the user knows the model is processing.
             out(C.dim("  ⋯ processing..."))
             status_line = True
             prefix_needed = True

@@ -209,6 +209,7 @@ dependencies = [
     { name = "prompt-toolkit" },
     { name = "pydantic" },
     { name = "python-dotenv" },
+    { name = "rich" },
     { name = "slack-sdk" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -233,6 +234,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.9.0" },
     { name = "pytest", marker = "extra == 'evals'", specifier = ">=8.0.0" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
+    { name = "rich", specifier = ">=14.3.4" },
     { name = "slack-sdk", specifier = ">=3.27.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32.0" },
 ]
