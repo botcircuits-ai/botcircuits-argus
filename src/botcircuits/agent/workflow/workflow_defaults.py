@@ -75,7 +75,7 @@ def apply_defaults(flow: dict) -> dict:
     #    settings.)
     _STEP_LEVEL = ("itemSource", "itemFacts", "itemVariables", "choices",
                    "conditions", "next", "decisionKey", "collectInto", "emit",
-                   "nullOn", "deterministic")
+                   "nullOn", "deterministic", "agent")
     for step in steps.values():
         sc = step.get("settings") if isinstance(step, dict) else None
         if not isinstance(sc, dict):

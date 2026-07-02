@@ -25,6 +25,11 @@ Shape of each emitted segment::
         "branchStep": "step_b" | None,         # the terminating branch
                                                # step, if the run ends on
                                                # one (else None)
+        "agent": "researcher" | None,          # the named agent (see
+                                               # `agents.<name>` at the
+                                               # workflow root) every step in
+                                               # this segment is pinned to;
+                                               # None = the run's default
     }
 
 `steps` always holds the ordered step ids walked in this segment. The
@@ -54,12 +59,19 @@ def _pausing(step: dict) -> bool:
     return step.get("type") in ("agentAction", "question", "listDecision")
 
 
+def _step_agent(step: dict) -> str | None:
+    """The named agent a step is pinned to (`agents.<name>` in the workflow
+    doc), or None for the run's default agent/model."""
+    agent = step.get("agent")
+    return agent if isinstance(agent, str) and agent else None
+
+
 def compute_segments(flow: dict) -> list[dict[str, Any]]:
     """Walk `flow` from its start and partition reachable steps into
     branch-delimited segments.
 
     Pure: never mutates `flow`. Returns the ordered list of segments,
-    each a dict of `{id, steps, branchStep}` (see module docstring).
+    each a dict of `{id, steps, branchStep, agent}` (see module docstring).
 
     Walking rules:
       - Begin a new segment at the start step and at every branch target.
@@ -67,6 +79,10 @@ def compute_segments(flow: dict) -> list[dict[str, Any]]:
         current segment, following each step's static `next`.
       - A `question` step always ends a segment: it pauses for the user,
         so the engine yields there regardless of branching.
+      - A step pinned to a different `agent` than the segment's own also
+        ends the segment — each segment is exactly one LLM call, so it
+        can't span two different agents/models. Re-queued as a fresh
+        segment head, same as a mid-walk `question`.
       - A branch step ends the current segment (recorded as `branchStep`);
         each of its choice targets seeds a fresh segment.
       - `start`/`systemAction` steps are transparent for batching: the
@@ -92,6 +108,7 @@ def compute_segments(flow: dict) -> list[dict[str, Any]]:
 
         ordered: list[str] = []
         branch_step: str | None = None
+        segment_agent: str | None = None
         cursor: str | None = head
         guard = 0
 
@@ -119,6 +136,18 @@ def compute_segments(flow: dict) -> list[dict[str, Any]]:
                 break
 
             if _pausing(step):
+                # A step pinned to a different agent than the ones already
+                # accumulated can't join this segment — a segment is one LLM
+                # call, and that call can only go to one agent/model. Stop
+                # before it and re-queue it as a fresh head, same as the
+                # mid-walk `question` case above. Only pausing steps make an
+                # LLM call, so transparent `start`/`systemAction` steps never
+                # trigger this check regardless of any stray `agent` field.
+                if ordered and _step_agent(step) != segment_agent:
+                    queue.append(cursor)
+                    break
+                if not ordered:
+                    segment_agent = _step_agent(step)
                 ordered.append(cursor)
 
             if _is_branch_step(step):
@@ -152,6 +181,7 @@ def compute_segments(flow: dict) -> list[dict[str, Any]]:
                 "id": head,
                 "steps": ordered,
                 "branchStep": branch_step,
+                "agent": segment_agent,
             })
 
     return segments

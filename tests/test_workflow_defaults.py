@@ -107,3 +107,20 @@ def test_dtype_upgrade_from_resolver():
          "resolver": {"kind": "enum_check"}}], "steps": {}}
     apply_defaults(flow)
     assert flow["variables"][0]["dataType"] == "string"  # enum stays string
+
+
+def test_agent_hoisted_from_settings_to_step_root():
+    flow = {"variables": [], "steps": {
+        "a": {"type": "agentAction", "settings": {"action": "do a", "agent": "researcher"}},
+    }}
+    apply_defaults(flow)
+    assert flow["steps"]["a"]["agent"] == "researcher"
+    assert "agent" not in flow["steps"]["a"]["settings"]
+
+
+def test_root_level_agent_left_untouched():
+    flow = {"variables": [], "steps": {
+        "a": {"type": "agentAction", "agent": "writer", "settings": {"action": "do a"}},
+    }}
+    apply_defaults(flow)
+    assert flow["steps"]["a"]["agent"] == "writer"

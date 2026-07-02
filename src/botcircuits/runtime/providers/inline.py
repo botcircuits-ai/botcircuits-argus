@@ -31,6 +31,7 @@ No LLM subprocess is ever spawned.
 from __future__ import annotations
 
 import json
+import sys
 from typing import Any
 
 from botcircuits.runtime.base import AgentRuntimeProvider, EventSink
@@ -76,6 +77,9 @@ class InlineRuntime(AgentRuntimeProvider):
 
     def __init__(self) -> None:
         self._seeded: SegmentResult | None = None
+        # Agent names already warned about (see `run_segment`) — warn once per
+        # name per run instead of spamming stderr every segment.
+        self._warned_agents: set[str] = set()
 
     def seed_result(self, result: SegmentResult) -> None:
         """Pre-load the host's observed values for the pending segment so the
@@ -91,8 +95,23 @@ class InlineRuntime(AgentRuntimeProvider):
         slots: dict[str, Any],
         item_variables: list[dict] | None = None,
         data_variables: list[dict] | None = None,
+        agent: str | None = None,
         event_sink: EventSink | None = None,
     ) -> SegmentResult:
+        # `agent` is accepted for signature parity with `AgentRuntimeProvider`
+        # but unused: the host agent performs every segment itself regardless
+        # of which named agent a step is pinned to. Warn once per agent name
+        # so an author who pinned a step expecting a model/runtime override
+        # notices it silently had no effect, instead of debugging a "wrong
+        # model" report with no lead.
+        if agent and agent not in self._warned_agents:
+            self._warned_agents.add(agent)
+            print(
+                f"[runtime:{self.name}] step pinned to agent '{agent}', but "
+                "the inline runtime has no per-agent overrides — the host's "
+                "own model handles this segment regardless of the pin.",
+                file=sys.stderr,
+            )
         # Seed mode: the host already performed THIS segment; return its values
         # once, then clear so the following segment hands off again.
         if self._seeded is not None:

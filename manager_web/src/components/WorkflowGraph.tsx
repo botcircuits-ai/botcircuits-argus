@@ -46,6 +46,9 @@ type StepNodeData = {
   label: string;
   kind?: string;
   action?: string;
+  /** Name of the `doc.agents` entry this step is pinned to, if any — shown
+   * as a small badge so a different-model step stands out on the canvas. */
+  agent?: string;
   selected: boolean;
   isStart: boolean;
   edgeHighlighted?: boolean;
@@ -94,6 +97,14 @@ function StepNode({ data, id }: NodeProps<StepNodeData>) {
         <span className="text-[11px] uppercase tracking-wide text-muted">
           {data.isStart ? "start" : data.kind || "step"}
         </span>
+        {data.agent && (
+          <span
+            title={`Runs on the "${data.agent}" agent`}
+            className="ml-auto inline-flex items-center rounded-full bg-brand/15 px-1.5 py-0.5 text-[10px] font-medium text-brand-600 dark:text-brand-400 truncate max-w-[100px]"
+          >
+            {data.agent}
+          </span>
+        )}
       </div>
 
       {editingName ? (
@@ -461,6 +472,7 @@ function buildGraph(
         label: id,
         kind: s.type,
         action: s.settings?.action,
+        agent: s.agent,
         selected: selectedStep === id,
         isStart: id === start || s.type === "start",
         onSelect: cb.onSelect,

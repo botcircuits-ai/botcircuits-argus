@@ -280,6 +280,53 @@ def _record_memory_graph(
         pass
 
 
+def _select_provider(
+    flow: dict, *, settings: dict | None, resolved_name: str,
+):
+    """Build the runtime provider for this run, honoring a per-agent
+    `agents` map on the workflow (`{name: {runtime?, model?}}`).
+
+    Steps with no `agent` always use the run's default (`resolved_name`) —
+    identical to today's behavior. When the workflow declares no `agents` at
+    all, this returns exactly what `select_runtime` alone would: no
+    multiplexing overhead for the common case.
+    """
+    agents_map = flow.get("agents")
+    if not isinstance(agents_map, dict) or not agents_map:
+        return select_runtime(settings=settings, name=resolved_name)
+
+    # Group agents by their resolved runtime type (default = resolved_name),
+    # so agents that share a runtime type build ONE instance and differentiate
+    # on model internally (see ClaudeCodeRuntime.agents_config).
+    by_runtime_agents: dict[str, dict[str, dict]] = {}
+    agent_runtime: dict[str, str] = {}
+    for agent_name, cfg in agents_map.items():
+        if not isinstance(cfg, dict):
+            continue
+        rt_name = cfg.get("runtime") or resolved_name
+        agent_runtime[agent_name] = rt_name
+        by_runtime_agents.setdefault(rt_name, {})[agent_name] = cfg
+
+    default_provider = select_runtime(
+        settings=settings, name=resolved_name,
+        agents_config=by_runtime_agents.get(resolved_name),
+    )
+    by_runtime: dict[str, Any] = {resolved_name: default_provider}
+    for rt_name, rt_agents in by_runtime_agents.items():
+        if rt_name in by_runtime:
+            continue
+        by_runtime[rt_name] = select_runtime(
+            settings=settings, name=rt_name, agents_config=rt_agents,
+        )
+
+    from botcircuits.runtime.providers.multiplex import MultiplexRuntime
+
+    return MultiplexRuntime(
+        default=default_provider, by_runtime=by_runtime,
+        agent_runtime=agent_runtime,
+    )
+
+
 async def _run(
     name: str,
     *,
@@ -310,7 +357,7 @@ async def _run(
     settings = None
     if runtime_command:
         settings = {"runtimes": {resolved_name: {"command": runtime_command}}}
-    provider = select_runtime(settings=settings, name=resolved_name)
+    provider = _select_provider(flow, settings=settings, resolved_name=resolved_name)
 
     # Resume from a persisted pause if this is a --reply continuation.
     saved = _load_state(name) if reply is not None else {}
