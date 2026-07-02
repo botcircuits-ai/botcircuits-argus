@@ -86,6 +86,38 @@ def test_compute_segments_splits_on_branch():
     assert "red" in by_id and "blue" in by_id
 
 
+def test_compute_segments_splits_on_agent_change():
+    """Two consecutive non-branching steps pinned to different agents must
+    NOT be merged into one segment — a segment is one LLM call, and that
+    call can only go to one agent/model."""
+    flow = {
+        "start": "start",
+        "variables": [],
+        "steps": {
+            "start": {"type": "start", "next": "a"},
+            "a": {"type": "agentAction", "agent": "researcher",
+                  "settings": {"action": "do a"}, "next": "b"},
+            "b": {"type": "agentAction", "agent": "researcher",
+                  "settings": {"action": "do b"}, "next": "c"},
+            "c": {"type": "agentAction", "settings": {"action": "do c"}},
+        },
+    }
+    segs = compute_segments(flow)
+    by_id = {s["id"]: s for s in segs}
+    # a+b share the "researcher" agent and batch together (segment id is
+    # "start", the walk's head — "start" is transparent); c has no agent
+    # (the run default) and gets re-queued as its own segment.
+    assert by_id["start"]["steps"] == ["a", "b"]
+    assert by_id["start"]["agent"] == "researcher"
+    assert by_id["c"]["steps"] == ["c"]
+    assert by_id["c"]["agent"] is None
+
+
+def test_compute_segments_default_agent_is_none():
+    segs = compute_segments(_linear_flow())
+    assert segs[0]["agent"] is None
+
+
 def test_question_step_is_isolated_into_its_own_segment():
     """A `question` must never be bundled with a preceding action step.
     Bundling breaks pause/resume — the resumed segment replays the earlier

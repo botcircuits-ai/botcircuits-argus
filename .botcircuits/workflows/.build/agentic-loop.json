@@ -1,0 +1,362 @@
+{
+  "name": "agentic-loop",
+  "description": "Agentic software development loop: task intake → planning with reviewer feedback iterations (max 5) → human approval → coding agents (frontend / backend / database) → code review with reiteration → documentation summary",
+  "flow": {
+    "start": "start",
+    "steps": {
+      "start": {
+        "type": "start",
+        "next": "collect_task"
+      },
+      "collect_task": {
+        "type": "question",
+        "settings": {
+          "action": "Ask the user to describe: the feature or problem, specific requirements, acceptance criteria, and relevant context (tech stack, constraints)."
+        },
+        "next": "init_state"
+      },
+      "init_state": {
+        "type": "systemAction",
+        "settings": {
+          "action": "Set review_iteration=0, code_review_iteration=0, has_feedback=true, code_approved=false."
+        },
+        "next": "planning_agent"
+      },
+      "planning_agent": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Using the original task and any prior reviewer feedback, write or update the implementation plan with these sections: 1) Executive Summary, 2) Task Breakdown (subtasks with owners: frontend/backend/database), 3) Acceptance Criteria (specific, testable), 4) Technical Approach (per-component design decisions), 5) Dependencies and Risks, 6) Revision History (append dated entry noting changes). Output the full updated plan."
+        },
+        "next": "plan_reviewer"
+      },
+      "plan_reviewer": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Increment review_iteration by 1. Review the plan against original task requirements for: completeness, technical feasibility, correct acceptance criteria, edge case coverage, and clarity. If fully satisfactory: set has_feedback=false. Otherwise: set has_feedback=true and append specific actionable feedback to the plan's Revision History."
+        },
+        "conditions": [
+          {
+            "condition": "has_feedback is false",
+            "next": "human_approval",
+            "expCondition": "has_feedback is 'false'"
+          },
+          {
+            "condition": "review_iteration equals 5",
+            "next": "human_approval",
+            "expCondition": "review_iteration is '5'"
+          },
+          {
+            "condition": "review_iteration exceeds 5",
+            "next": "human_approval",
+            "expCondition": "review_iteration greater than '5'"
+          }
+        ],
+        "next": "planning_agent",
+        "choices": [
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "has_feedback",
+                "operator": "is",
+                "value": "false"
+              }
+            ],
+            "next": "human_approval"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "review_iteration",
+                "operator": "is",
+                "value": "5"
+              }
+            ],
+            "next": "human_approval"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "review_iteration",
+                "operator": "greater than",
+                "value": "5"
+              }
+            ],
+            "next": "human_approval"
+          }
+        ]
+      },
+      "human_approval": {
+        "type": "question",
+        "settings": {
+          "action": "Present the plan (including revision history) and ask the user to reply 'approve' to proceed or 'reject' with specific comments to revise."
+        },
+        "conditions": [
+          {
+            "condition": "human rejects the plan",
+            "next": "reset_for_revision",
+            "expCondition": "human_plan_decision is 'reject'"
+          },
+          {
+            "condition": "human requests changes to the plan",
+            "next": "reset_for_revision",
+            "expCondition": "human_plan_decision is 'reject'"
+          }
+        ],
+        "next": "frontend_coding_agent",
+        "choices": [
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "human_plan_decision",
+                "operator": "is",
+                "value": "reject"
+              }
+            ],
+            "next": "reset_for_revision"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "human_plan_decision",
+                "operator": "is",
+                "value": "reject"
+              }
+            ],
+            "next": "reset_for_revision"
+          }
+        ]
+      },
+      "reset_for_revision": {
+        "type": "systemAction",
+        "settings": {
+          "action": "Set review_iteration=0, has_feedback=true."
+        },
+        "next": "planning_agent"
+      },
+      "frontend_coding_agent": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Implement all frontend components per the approved plan: UI layouts, forms, client-side state management, API call integrations, input validation. Satisfy all plan acceptance criteria. Output complete working code files and note: what was built, which acceptance criteria were addressed, and any implementation decisions."
+        },
+        "next": "backend_coding_agent",
+        "agent": "claude-frontend"
+      },
+      "backend_coding_agent": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Implement all backend components per the approved plan: API endpoints, business logic services, auth/authorization, input validation, external system integrations. Satisfy all plan acceptance criteria. Output complete working code files and note: what was built, which acceptance criteria were addressed, and any implementation decisions."
+        },
+        "next": "database_coding_agent",
+        "agent": "claude-backend"
+      },
+      "database_coding_agent": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Implement all database components per the approved plan: schema definitions, migrations, indexes, queries, data access layer. Satisfy all plan acceptance criteria. Output complete working code files and note: what was built, which acceptance criteria were addressed, and any implementation decisions."
+        },
+        "next": "code_reviewer"
+      },
+      "code_reviewer": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Increment code_review_iteration by 1. Review all frontend, backend, and database code against the plan's acceptance criteria. Check: correctness, criterion completeness, code quality/consistency, security, and cross-component integration. If all criteria met and production-ready: set code_approved=true. Otherwise: set code_approved=false and output a report specifying which criteria are unmet and what each agent must fix."
+        },
+        "conditions": [
+          {
+            "condition": "code_approved is true",
+            "next": "documentation_agent",
+            "expCondition": "code_approved is 'true'"
+          },
+          {
+            "condition": "code_review_iteration equals 3",
+            "next": "documentation_agent",
+            "expCondition": "code_review_iteration is '3'"
+          },
+          {
+            "condition": "code_review_iteration exceeds 3",
+            "next": "documentation_agent",
+            "expCondition": "code_review_iteration greater than '3'"
+          }
+        ],
+        "next": "frontend_coding_agent",
+        "agent": "claude-code-review",
+        "choices": [
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "code_approved",
+                "operator": "is",
+                "value": "true"
+              }
+            ],
+            "next": "documentation_agent"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "code_review_iteration",
+                "operator": "is",
+                "value": "3"
+              }
+            ],
+            "next": "documentation_agent"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "code_review_iteration",
+                "operator": "greater than",
+                "value": "3"
+              }
+            ],
+            "next": "documentation_agent"
+          }
+        ]
+      },
+      "documentation_agent": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Write an implementation summary with these sections: 1) What Was Built (feature overview and components), 2) Architecture (frontend/backend/database integration), 3) Acceptance Criteria Checklist (each criterion: met/partially met/not met), 4) Setup and Deployment Instructions (step-by-step), 5) Code Review Summary (findings and known limitations), 6) Future Improvements. Ground every statement in the approved plan and actual code produced."
+        }
+      }
+    },
+    "variables": [
+      {
+        "variableName": "has_feedback",
+        "dataType": "string",
+        "description": "Indicates whether the plan reviewer has feedback requiring further revision; 'true' means feedback exists, 'false' means the plan is satisfactory"
+      },
+      {
+        "variableName": "review_iteration",
+        "dataType": "number",
+        "description": "Counter tracking how many plan review cycles have been completed"
+      },
+      {
+        "variableName": "human_plan_decision",
+        "dataType": "string",
+        "description": "The human reviewer's decision on the implementation plan; 'approve' to proceed with implementation, 'reject' to request revisions"
+      },
+      {
+        "variableName": "code_approved",
+        "dataType": "string",
+        "description": "Indicates whether the code reviewer has approved all code as production-ready; 'true' means approved, 'false' means issues remain"
+      },
+      {
+        "variableName": "code_review_iteration",
+        "dataType": "number",
+        "description": "Counter tracking how many code review cycles have been completed"
+      }
+    ],
+    "segments": [
+      {
+        "id": "start",
+        "steps": [
+          "collect_task"
+        ],
+        "branchStep": null,
+        "agent": null
+      },
+      {
+        "id": "init_state",
+        "steps": [
+          "planning_agent",
+          "plan_reviewer"
+        ],
+        "branchStep": "plan_reviewer",
+        "agent": null
+      },
+      {
+        "id": "human_approval",
+        "steps": [
+          "human_approval"
+        ],
+        "branchStep": "human_approval",
+        "agent": null
+      },
+      {
+        "id": "planning_agent",
+        "steps": [
+          "planning_agent",
+          "plan_reviewer"
+        ],
+        "branchStep": "plan_reviewer",
+        "agent": null
+      },
+      {
+        "id": "reset_for_revision",
+        "steps": [
+          "planning_agent",
+          "plan_reviewer"
+        ],
+        "branchStep": "plan_reviewer",
+        "agent": null
+      },
+      {
+        "id": "frontend_coding_agent",
+        "steps": [
+          "frontend_coding_agent"
+        ],
+        "branchStep": null,
+        "agent": "claude-frontend"
+      },
+      {
+        "id": "backend_coding_agent",
+        "steps": [
+          "backend_coding_agent"
+        ],
+        "branchStep": null,
+        "agent": "claude-backend"
+      },
+      {
+        "id": "database_coding_agent",
+        "steps": [
+          "database_coding_agent"
+        ],
+        "branchStep": null,
+        "agent": null
+      },
+      {
+        "id": "code_reviewer",
+        "steps": [
+          "code_reviewer"
+        ],
+        "branchStep": "code_reviewer",
+        "agent": "claude-code-review"
+      },
+      {
+        "id": "documentation_agent",
+        "steps": [
+          "documentation_agent"
+        ],
+        "branchStep": null,
+        "agent": null
+      }
+    ]
+  },
+  "agents": {
+    "claude-planning": {
+      "runtime": "claude-code",
+      "model": "sonnet-4.6"
+    },
+    "claude-frontend": {
+      "runtime": "claude-code",
+      "model": "sonnet-4.6"
+    },
+    "claude-backend": {
+      "runtime": "claude-code",
+      "model": "haiku-4.5"
+    },
+    "claude-code-review": {
+      "runtime": "claude-code",
+      "model": "sonnet-4.6"
+    }
+  }
+}

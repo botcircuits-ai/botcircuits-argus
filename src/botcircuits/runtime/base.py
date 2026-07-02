@@ -68,12 +68,18 @@ class AgentRuntimeProvider(ABC):
         slots: dict[str, Any],
         item_variables: list[dict] | None = None,
         data_variables: list[dict] | None = None,
+        agent: str | None = None,
         event_sink: EventSink | None = None,
     ) -> SegmentResult:
         """Perform one segment's actions and report what it observed.
 
         Mirrors the engine's `SegmentRunner` protocol exactly so a bound
         method drops straight in as the engine's `run_segment` callback.
+
+        `agent`, when given, is the named agent (`agents.<name>` in the
+        workflow doc) this segment is pinned to — a different model/runtime
+        than the run's default. `None` means the run's default agent/model.
+        A provider that doesn't support per-agent overrides may ignore it.
         """
         raise NotImplementedError
 

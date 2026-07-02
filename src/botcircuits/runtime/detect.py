@@ -182,6 +182,7 @@ def select_runtime(
     *,
     native_factory: Callable[[], AgentRuntimeProvider] | None = None,
     name: str | None = None,
+    agents_config: dict[str, dict] | None = None,
 ) -> AgentRuntimeProvider:
     """Instantiate the selected runtime provider.
 
@@ -190,6 +191,13 @@ def select_runtime(
     caller owns, so this module never constructs one itself. When the
     selected runtime is `native` but no factory is supplied, that's a
     configuration error the caller must handle.
+
+    `agents_config`, when given, is `{agent_name: {"model": ...}}` for every
+    named agent (from the workflow's `agents` map) routed to THIS runtime
+    instance — see `MultiplexRuntime`, which builds one instance per distinct
+    runtime type and passes it each type's slice of the map. Only the CLI
+    providers (claude-code/codex/openclaw) consume it here; `native_factory`
+    builds its own `NativeRuntime` with its own `agents_config` directly.
     """
     chosen = (name or detect_runtime_name(settings)).lower()
     config = runtime_config(chosen, settings)
@@ -215,6 +223,9 @@ def select_runtime(
     if chosen == HERMES:
         # Hermes reuses the whole claude-code segment/slot contract; it only
         # overrides where usage comes from (session store, not stdout).
+        # `agents_config` isn't threaded here yet — hermes per-agent models
+        # are out of scope for now (see `runtimes.<name>.command` for a
+        # whole-run override in the meantime).
         from botcircuits.runtime.providers.hermes import HermesRuntime
 
         return HermesRuntime(config)
@@ -224,7 +235,7 @@ def select_runtime(
     if chosen in (CLAUDE_CODE, CODEX, OPENCLAW):
         # claude-code is the reference CLI impl; codex/openclaw reuse it via
         # config (same JSON contract) until they need a bespoke parser.
-        return ClaudeCodeRuntime(config)
+        return ClaudeCodeRuntime(config, agents_config=agents_config)
 
     # Unknown explicit name: fall back to native if we can, else error.
     if native_factory is not None:

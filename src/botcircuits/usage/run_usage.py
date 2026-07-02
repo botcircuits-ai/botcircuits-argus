@@ -57,6 +57,9 @@ class ActionUsage:
 
     step: str = ""
     runtime: str = ""
+    #: The named agent (`agents.<name>` in the workflow doc) this call was
+    #: pinned to, or "" for the run's default agent/model.
+    agent: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_tokens: int = 0

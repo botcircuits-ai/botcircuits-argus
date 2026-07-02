@@ -73,6 +73,27 @@ def test_health_reports_auth_configured(manager):
     assert r.json()["auth_configured"] is True
 
 
+# -- models -------------------------------------------------------------
+
+def test_models_requires_auth(manager):
+    client, _ = manager
+    assert client.get("/api/models").status_code == 401
+
+
+def test_models_returns_provider_catalog(manager):
+    client, _ = manager
+    token = client.post(
+        "/api/auth/login", json={"username": "admin", "password": "s3cret"}
+    ).json()["token"]
+    r = client.get("/api/models", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body) == {"anthropic", "openai", "gemini"}
+    for spec in body.values():
+        assert isinstance(spec["label"], str) and spec["label"]
+        assert isinstance(spec["models"], list) and spec["models"]
+
+
 # -- sessions ---------------------------------------------------------------
 
 def _auth_header(client):
