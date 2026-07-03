@@ -88,7 +88,7 @@ def test_models_returns_provider_catalog(manager):
     r = client.get("/api/models", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
     body = r.json()
-    assert set(body) == {"anthropic", "openai", "gemini"}
+    assert set(body) == {"anthropic", "openai", "gemini", "openrouter"}
     for spec in body.values():
         assert isinstance(spec["label"], str) and spec["label"]
         assert isinstance(spec["models"], list) and spec["models"]

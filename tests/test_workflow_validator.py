@@ -179,6 +179,15 @@ def test_valid_agent_runtime_and_provider_not_flagged(tmp_path):
     assert not any("runtime" in i or "provider" in i for i in issues)
 
 
+def test_openrouter_provider_not_flagged(tmp_path):
+    _ws(tmp_path)
+    doc = _good(tmp_path)
+    doc["agents"] = {"researcher": {"provider": "openrouter",
+                                     "model": "anthropic/claude-3.7-sonnet"}}
+    issues = static_issues(doc, base_dir=tmp_path)
+    assert not any("provider" in i for i in issues)
+
+
 def test_agent_pinned_to_self_runtime_flagged(tmp_path):
     _ws(tmp_path)
     doc = _good(tmp_path)
