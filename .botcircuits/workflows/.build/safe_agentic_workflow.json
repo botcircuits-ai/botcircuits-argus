@@ -1,0 +1,679 @@
+{
+  "name": "safe_agentic_workflow",
+  "description": "SAFe Agentic Workflow (SAW)-modeled software delivery pipeline: task intake -> Business Systems Analyst requirements gate -> frontend/backend/database implementation -> QAS validation gate with per-agent reroute authority (capped at 3 cycles) -> Release Train Engineer PR shepherd (never fixes code, escalates instead) -> System Architect design review -> automated review pass -> human approval/merge, each rejection path routed back to the specific stage at fault -> documentation summary.",
+  "flow": {
+    "start": "start",
+    "variables": [
+      {
+        "variableName": "task_description",
+        "description": "The feature or task the user wants implemented, as originally provided.",
+        "dataType": "string"
+      },
+      {
+        "variableName": "acceptance_criteria",
+        "description": "The derived, testable acceptance criteria / definition of done for the task.",
+        "dataType": "string"
+      },
+      {
+        "variableName": "requirements_complete",
+        "description": "Whether the acceptance criteria are clear, complete, and testable.",
+        "dataType": "boolean"
+      },
+      {
+        "variableName": "qas_iteration",
+        "description": "Number of QAS validation cycles run against the current implementation.",
+        "dataType": "number"
+      },
+      {
+        "variableName": "qas_approved",
+        "description": "Whether QAS validated the implementation against acceptance_criteria.",
+        "dataType": "boolean"
+      },
+      {
+        "variableName": "qas_reroute_target",
+        "description": "Which coding agent (frontend, backend, or database) owns the defect QAS found.",
+        "dataType": "string"
+      },
+      {
+        "variableName": "architect_iteration",
+        "description": "Number of System Architect design-review cycles run.",
+        "dataType": "number"
+      },
+      {
+        "variableName": "architect_approved",
+        "description": "Whether the System Architect approved the architecture/design of the implementation.",
+        "dataType": "boolean"
+      },
+      {
+        "variableName": "automated_review_iteration",
+        "description": "Number of automated (lint/style/consistency) review cycles run.",
+        "dataType": "number"
+      },
+      {
+        "variableName": "automated_review_passed",
+        "description": "Whether the automated review pass found no blocking issues.",
+        "dataType": "boolean"
+      },
+      {
+        "variableName": "pr_ready",
+        "description": "Whether the Release Train Engineer confirmed the PR is ready to move into review.",
+        "dataType": "boolean"
+      },
+      {
+        "variableName": "human_rejection_category",
+        "dataType": "string",
+        "description": "Category of the human's rejection reason at PR approval: 'implementation' for coding/implementation defects, 'acceptance_criteria' for QAS-level issues, or 'architecture' for design issues."
+      }
+    ],
+    "steps": {
+      "start": {
+        "type": "start",
+        "next": "collect_task"
+      },
+      "collect_task": {
+        "type": "question",
+        "settings": {
+          "action": "Describe the task: feature/problem to solve, specific requirements, acceptance criteria (if known), and context (tech stack, constraints)."
+        },
+        "next": "requirements_gate"
+      },
+      "requirements_gate": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Business Systems Analyst. Review task_description (+ any new clarification) and derive acceptance_criteria: specific, testable definition of done. If criteria are already clear, formalize them. If requirements are missing, ambiguous, or too vague, set requirements_complete=false and record exactly what's missing/unclear. Else set requirements_complete=true. Do not guess at missing requirements."
+        },
+        "next": "init_pipeline_state",
+        "conditions": [
+          {
+            "condition": "requirements_complete is false",
+            "next": "clarify_requirements",
+            "expCondition": "requirements_complete is false"
+          }
+        ],
+        "choices": [
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "requirements_complete",
+                "operator": "is",
+                "value": false
+              }
+            ],
+            "next": "clarify_requirements"
+          }
+        ]
+      },
+      "clarify_requirements": {
+        "type": "question",
+        "settings": {
+          "action": "Answer the specific questions raised in the requirements review above so acceptance_criteria can be finalized."
+        },
+        "next": "requirements_gate"
+      },
+      "init_pipeline_state": {
+        "type": "systemAction",
+        "settings": {
+          "action": "Set qas_iteration=0, qas_approved=false, architect_iteration=0, architect_approved=false, automated_review_iteration=0, automated_review_passed=false, pr_ready=false."
+        },
+        "next": "frontend_coding_agent"
+      },
+      "frontend_coding_agent": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Frontend coding agent (UI/client-side logic). Per acceptance_criteria, implement/fix: UI layouts, forms, client-side state management, API call integrations, input validation. If rerouted here by QAS, System Architect, automated review, or human reviewer for a specific defect, fix exactly that defect. Produce complete working code files; document what changed and which acceptance criteria it addresses."
+        },
+        "next": "backend_coding_agent"
+      },
+      "backend_coding_agent": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Backend coding agent (server-side logic/APIs). Per acceptance_criteria, implement/fix: API endpoints, business logic services, authN/authZ, input validation, integrations with external systems. If rerouted here by QAS, System Architect, automated review, or human reviewer for a specific defect, fix exactly that defect. Produce complete working code files; document what changed and which acceptance criteria it addresses."
+        },
+        "next": "database_coding_agent"
+      },
+      "database_coding_agent": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Database coding agent (data modeling/persistence). Per acceptance_criteria, implement/fix: schema definitions, migrations, indexes, queries, data access layer. If rerouted here by QAS, System Architect, automated review, or human reviewer for a specific defect, fix exactly that defect. Produce complete working code files; document what changed and which acceptance criteria it addresses."
+        },
+        "next": "qas_validation"
+      },
+      "qas_validation": {
+        "type": "agentAction",
+        "settings": {
+          "action": "QAS — holds iteration authority. Increment qas_iteration by 1. Validate frontend/backend/database implementation against every item in acceptance_criteria. If all pass, set qas_approved=true. Else set qas_approved=false, identify the failing criterion and the layer owning the defect, set qas_reroute_target to exactly one of `frontend`, `backend`, or `database`, and write specific, actionable findings for that agent."
+        },
+        "next": "frontend_coding_agent",
+        "conditions": [
+          {
+            "condition": "qas_approved is true",
+            "next": "pr_shepherd",
+            "expCondition": "qas_approved is true"
+          },
+          {
+            "condition": "qas_iteration equals 3",
+            "next": "pr_shepherd",
+            "expCondition": "qas_iteration is 3"
+          },
+          {
+            "condition": "qas_iteration exceeds 3",
+            "next": "pr_shepherd",
+            "expCondition": "qas_iteration greater than 3"
+          },
+          {
+            "condition": "qas_reroute_target is frontend",
+            "next": "frontend_coding_agent",
+            "expCondition": "qas_reroute_target is 'frontend'"
+          },
+          {
+            "condition": "qas_reroute_target is backend",
+            "next": "backend_coding_agent",
+            "expCondition": "qas_reroute_target is 'backend'"
+          },
+          {
+            "condition": "qas_reroute_target is database",
+            "next": "database_coding_agent",
+            "expCondition": "qas_reroute_target is 'database'"
+          }
+        ],
+        "choices": [
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "qas_approved",
+                "operator": "is",
+                "value": true
+              }
+            ],
+            "next": "pr_shepherd"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "qas_iteration",
+                "operator": "is",
+                "value": 3
+              }
+            ],
+            "next": "pr_shepherd"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "qas_iteration",
+                "operator": "greater than",
+                "value": 3
+              }
+            ],
+            "next": "pr_shepherd"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "qas_reroute_target",
+                "operator": "is",
+                "value": "frontend"
+              }
+            ],
+            "next": "frontend_coding_agent"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "qas_reroute_target",
+                "operator": "is",
+                "value": "backend"
+              }
+            ],
+            "next": "backend_coding_agent"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "qas_reroute_target",
+                "operator": "is",
+                "value": "database"
+              }
+            ],
+            "next": "database_coding_agent"
+          }
+        ]
+      },
+      "pr_shepherd": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Release Train Engineer (PR shepherd) — do not write, fix, or modify code. Summarize frontend/backend/database changes and confirm QAS sign-off from qas_approved. If qas_approved=true, set pr_ready=true and prepare a PR summary for review. If qas_approved=false (cycle cap reached without approval), do not attempt a fix — set pr_ready=false and write an escalation summary of exactly which acceptance criteria remain unresolved and why."
+        },
+        "next": "architect_review",
+        "conditions": [
+          {
+            "condition": "pr_ready is false",
+            "next": "escalate_unresolved_qas",
+            "expCondition": "pr_ready is false"
+          }
+        ],
+        "choices": [
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "pr_ready",
+                "operator": "is",
+                "value": false
+              }
+            ],
+            "next": "escalate_unresolved_qas"
+          }
+        ]
+      },
+      "escalate_unresolved_qas": {
+        "type": "agentAction",
+        "settings": {
+          "action": "QAS cycle cap was reached without approval; RTE escalated instead of fixing. Compile the QAS findings history and RTE's escalation summary into one report on the unresolved acceptance criteria, for human decision."
+        },
+        "next": "human_approval"
+      },
+      "architect_review": {
+        "type": "agentAction",
+        "settings": {
+          "action": "System Architect. Increment architect_iteration by 1. Review at the architecture/design level: component boundaries, frontend/backend/database integration correctness, consistency with existing system design, technical debt introduced — distinct from QAS's acceptance-criteria review; evaluate structure/design quality, not criteria pass/fail. If sound, set architect_approved=true. Else set architect_approved=false and write specific findings on what must change and which layer is affected."
+        },
+        "next": "frontend_coding_agent",
+        "conditions": [
+          {
+            "condition": "architect_approved is true",
+            "next": "automated_review",
+            "expCondition": "architect_approved is true"
+          },
+          {
+            "condition": "architect_iteration equals 3",
+            "next": "automated_review",
+            "expCondition": "architect_iteration is 3"
+          },
+          {
+            "condition": "architect_iteration exceeds 3",
+            "next": "automated_review",
+            "expCondition": "architect_iteration greater than 3"
+          }
+        ],
+        "choices": [
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "architect_approved",
+                "operator": "is",
+                "value": true
+              }
+            ],
+            "next": "automated_review"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "architect_iteration",
+                "operator": "is",
+                "value": 3
+              }
+            ],
+            "next": "automated_review"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "architect_iteration",
+                "operator": "greater than",
+                "value": 3
+              }
+            ],
+            "next": "automated_review"
+          }
+        ]
+      },
+      "automated_review": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Run automated review: lint, style, cross-file consistency across all changed frontend/backend/database code. Increment automated_review_iteration by 1. If no blocking issues, set automated_review_passed=true. Else set automated_review_passed=false and list the specific blocking issues."
+        },
+        "next": "frontend_coding_agent",
+        "conditions": [
+          {
+            "condition": "automated_review_passed is true",
+            "next": "human_approval",
+            "expCondition": "automated_review_passed is true"
+          },
+          {
+            "condition": "automated_review_iteration equals 3",
+            "next": "human_approval",
+            "expCondition": "automated_review_iteration is 3"
+          },
+          {
+            "condition": "automated_review_iteration exceeds 3",
+            "next": "human_approval",
+            "expCondition": "automated_review_iteration greater than 3"
+          }
+        ],
+        "choices": [
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "automated_review_passed",
+                "operator": "is",
+                "value": true
+              }
+            ],
+            "next": "human_approval"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "automated_review_iteration",
+                "operator": "is",
+                "value": 3
+              }
+            ],
+            "next": "human_approval"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "automated_review_iteration",
+                "operator": "greater than",
+                "value": 3
+              }
+            ],
+            "next": "human_approval"
+          }
+        ]
+      },
+      "human_approval": {
+        "type": "question",
+        "settings": {
+          "action": "The PR summary, QAS sign-off status, architecture review, and automated review results are above. Reply 'approve' to merge, or 'reject' with comments explaining what's wrong: say whether it's an implementation/coding defect, an acceptance-criteria (QAS-level) issue, or an architecture/design issue."
+        },
+        "next": "documentation_agent",
+        "conditions": [
+          {
+            "condition": "human rejects citing an implementation defect",
+            "next": "reset_for_recode",
+            "expCondition": "human_rejection_category is 'implementation'"
+          },
+          {
+            "condition": "human rejects citing a coding defect",
+            "next": "reset_for_recode",
+            "expCondition": "human_rejection_category is 'implementation'"
+          },
+          {
+            "condition": "human rejects citing an acceptance criteria issue",
+            "next": "reset_for_qas",
+            "expCondition": "human_rejection_category is 'acceptance_criteria'"
+          },
+          {
+            "condition": "human rejects citing a QAS-level issue",
+            "next": "reset_for_qas",
+            "expCondition": "human_rejection_category is 'acceptance_criteria'"
+          },
+          {
+            "condition": "human rejects citing an architecture issue",
+            "next": "reset_for_architect",
+            "expCondition": "human_rejection_category is 'architecture'"
+          },
+          {
+            "condition": "human rejects citing a design issue",
+            "next": "reset_for_architect",
+            "expCondition": "human_rejection_category is 'architecture'"
+          }
+        ],
+        "choices": [
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "human_rejection_category",
+                "operator": "is",
+                "value": "implementation"
+              }
+            ],
+            "next": "reset_for_recode"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "human_rejection_category",
+                "operator": "is",
+                "value": "implementation"
+              }
+            ],
+            "next": "reset_for_recode"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "human_rejection_category",
+                "operator": "is",
+                "value": "acceptance_criteria"
+              }
+            ],
+            "next": "reset_for_qas"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "human_rejection_category",
+                "operator": "is",
+                "value": "acceptance_criteria"
+              }
+            ],
+            "next": "reset_for_qas"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "human_rejection_category",
+                "operator": "is",
+                "value": "architecture"
+              }
+            ],
+            "next": "reset_for_architect"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "human_rejection_category",
+                "operator": "is",
+                "value": "architecture"
+              }
+            ],
+            "next": "reset_for_architect"
+          }
+        ]
+      },
+      "reset_for_recode": {
+        "type": "systemAction",
+        "settings": {
+          "action": "Reset qas_iteration=0, qas_approved=false, architect_iteration=0, architect_approved=false, automated_review_iteration=0, automated_review_passed=false, pr_ready=false, so the full validation pipeline re-runs after the human-flagged coding defect is fixed."
+        },
+        "next": "frontend_coding_agent"
+      },
+      "reset_for_qas": {
+        "type": "systemAction",
+        "settings": {
+          "action": "Reset qas_iteration=0, qas_approved=false, architect_iteration=0, architect_approved=false, automated_review_iteration=0, automated_review_passed=false, pr_ready=false, so QAS re-validates against the human's acceptance-criteria feedback and downstream gates re-run."
+        },
+        "next": "qas_validation"
+      },
+      "reset_for_architect": {
+        "type": "systemAction",
+        "settings": {
+          "action": "Reset architect_iteration=0, architect_approved=false, automated_review_iteration=0, automated_review_passed=false, pr_ready=false, so the System Architect re-reviews against the human's architecture feedback and downstream gates re-run."
+        },
+        "next": "architect_review"
+      },
+      "documentation_agent": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Documentation agent. Write an implementation summary with sections: 1) What Was Built — feature overview and all components delivered. 2) Architecture — how frontend/backend/database integrate, informed by System Architect findings. 3) Acceptance Criteria Checklist — status of each item in acceptance_criteria. 4) Setup and Deployment Instructions — step-by-step guide to run/deploy. 5) Review History — every QAS reroute (agent, why), every architect finding, every automated review issue, and the human approval decision. 6) Future Improvements — recommended follow-up work. Ground every statement in acceptance_criteria and the actual code/findings produced during the pipeline."
+        }
+      }
+    },
+    "segments": [
+      {
+        "id": "start",
+        "steps": [
+          "collect_task"
+        ],
+        "branchStep": null,
+        "agent": null
+      },
+      {
+        "id": "requirements_gate",
+        "steps": [
+          "requirements_gate"
+        ],
+        "branchStep": "requirements_gate",
+        "agent": null
+      },
+      {
+        "id": "clarify_requirements",
+        "steps": [
+          "clarify_requirements"
+        ],
+        "branchStep": null,
+        "agent": null
+      },
+      {
+        "id": "init_pipeline_state",
+        "steps": [
+          "frontend_coding_agent",
+          "backend_coding_agent",
+          "database_coding_agent",
+          "qas_validation"
+        ],
+        "branchStep": "qas_validation",
+        "agent": null
+      },
+      {
+        "id": "pr_shepherd",
+        "steps": [
+          "pr_shepherd"
+        ],
+        "branchStep": "pr_shepherd",
+        "agent": null
+      },
+      {
+        "id": "frontend_coding_agent",
+        "steps": [
+          "frontend_coding_agent",
+          "backend_coding_agent",
+          "database_coding_agent",
+          "qas_validation"
+        ],
+        "branchStep": "qas_validation",
+        "agent": null
+      },
+      {
+        "id": "backend_coding_agent",
+        "steps": [
+          "backend_coding_agent",
+          "database_coding_agent",
+          "qas_validation"
+        ],
+        "branchStep": "qas_validation",
+        "agent": null
+      },
+      {
+        "id": "database_coding_agent",
+        "steps": [
+          "database_coding_agent",
+          "qas_validation"
+        ],
+        "branchStep": "qas_validation",
+        "agent": null
+      },
+      {
+        "id": "escalate_unresolved_qas",
+        "steps": [
+          "escalate_unresolved_qas"
+        ],
+        "branchStep": null,
+        "agent": null
+      },
+      {
+        "id": "architect_review",
+        "steps": [
+          "architect_review"
+        ],
+        "branchStep": "architect_review",
+        "agent": null
+      },
+      {
+        "id": "human_approval",
+        "steps": [
+          "human_approval"
+        ],
+        "branchStep": "human_approval",
+        "agent": null
+      },
+      {
+        "id": "automated_review",
+        "steps": [
+          "automated_review"
+        ],
+        "branchStep": "automated_review",
+        "agent": null
+      },
+      {
+        "id": "reset_for_recode",
+        "steps": [
+          "frontend_coding_agent",
+          "backend_coding_agent",
+          "database_coding_agent",
+          "qas_validation"
+        ],
+        "branchStep": "qas_validation",
+        "agent": null
+      },
+      {
+        "id": "reset_for_qas",
+        "steps": [
+          "qas_validation"
+        ],
+        "branchStep": "qas_validation",
+        "agent": null
+      },
+      {
+        "id": "reset_for_architect",
+        "steps": [
+          "architect_review"
+        ],
+        "branchStep": "architect_review",
+        "agent": null
+      },
+      {
+        "id": "documentation_agent",
+        "steps": [
+          "documentation_agent"
+        ],
+        "branchStep": null,
+        "agent": null
+      }
+    ]
+  }
+}
