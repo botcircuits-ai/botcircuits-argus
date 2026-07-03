@@ -545,7 +545,7 @@ function StepFields({
  * to whichever runtime handles it. */
 /** Fallback provider list when the catalog hasn't loaded (or failed to) —
  * the Provider select still works, just without model suggestions yet. */
-const FALLBACK_PROVIDERS = ["anthropic", "openai", "gemini"];
+const FALLBACK_PROVIDERS = ["anthropic", "openai", "gemini", "openrouter"];
 
 function AgentRow({
   name,
