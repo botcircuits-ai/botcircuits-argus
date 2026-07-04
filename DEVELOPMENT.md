@@ -33,7 +33,7 @@ uv run botcircuits init
 - **[uv](https://docs.astral.sh/uv/)** — Python package/environment manager used by this project
 - **Node.js 18+** and **npm** — only if you plan to run the Argus Web Manager frontend
 - A host AI agent **(Claude Code or Hermes)** if you want to drive workflows through an agent conversation rather than the CLI directly
-- API keys for the LLM providers you plan to use: **Anthropic**, **OpenAI**, and/or **Google/Gemini**
+- API keys for the LLM providers you plan to use: **Anthropic**, **OpenAI**, **Google/Gemini**, and/or **OpenRouter**
 
 ---
 
@@ -47,7 +47,7 @@ uv run botcircuits init
 │   ├── cli/                   botcircuits console entry point and commands
 │   ├── gateway/               FastAPI messaging gateway (Slack, WhatsApp, webhook, cron)
 │   ├── manager/               FastAPI backend for the Web Manager
-│   ├── providers/             LLM provider adapters (anthropic, openai, gemini)
+│   ├── providers/             LLM provider adapters (anthropic, openai, gemini, openrouter)
 │   ├── runtime/               Host-agent runtime abstraction
 │   └── usage/                 Token/cost accounting
 ├── tests/                     pytest unit-test collection
@@ -95,16 +95,17 @@ Required for any run that calls an LLM:
 
 | Variable | Purpose |
 |---|---|
-| `LLM_PROVIDER` | `anthropic`, `openai`, or `gemini` |
+| `LLM_PROVIDER` | `anthropic`, `openai`, `gemini`, or `openrouter` |
 | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `OPENAI_API_KEY` | OpenAI API key |
 | `GEMINI_API_KEY` | Google Gemini API key |
+| `OPENROUTER_API_KEY` | OpenRouter API key — multi-vendor routing via an OpenAI-compatible API; model ids are `vendor/model` (e.g. `anthropic/claude-3.7-sonnet`). Separate per-key rate limits/billing from the vendor-direct providers above. |
 
 Optional overrides:
 
 | Variable | Purpose |
 |---|---|
-| `ANTHROPIC_MODEL` / `OPENAI_MODEL` / `GEMINI_MODEL` | Model selection |
+| `ANTHROPIC_MODEL` / `OPENAI_MODEL` / `GEMINI_MODEL` / `OPENROUTER_MODEL` | Model selection |
 | `BOTCIRCUITS_ENV_FILE` | Custom `.env` file path |
 | `BOTCIRCUITS_WORKFLOWS_DIR` | Override `.botcircuits/workflows/` location |
 

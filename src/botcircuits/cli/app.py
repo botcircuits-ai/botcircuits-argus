@@ -45,7 +45,9 @@ from typing import Optional
 
 from botcircuits.agent import Agent, default_registry, register_workflows
 from botcircuits.agent.workflow import LocalWorkflowError
-from botcircuits.providers import AnthropicProvider, GeminiProvider, OpenAIProvider
+from botcircuits.providers import (
+    AnthropicProvider, GeminiProvider, OpenAIProvider, OpenRouterProvider,
+)
 from botcircuits.providers.base import LLMProvider
 from botcircuits.cli.ansi import C, out
 from botcircuits.cli.commands import CLIState, handle_slash
@@ -85,7 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
                         "auto-discovered ~/.botcircuits/ and .botcircuits/ files. "
                         "CLI flags still win over its values.")
     p.add_argument("--provider", default=None,
-                   choices=["anthropic", "openai", "gemini"],
+                   choices=["anthropic", "openai", "gemini", "openrouter"],
                    help="LLM provider (default: $LLM_PROVIDER or 'anthropic')")
     p.add_argument("--model", default=None,
                    help="Override the provider's default model")
@@ -196,6 +198,9 @@ def make_provider(kind: str, model: Optional[str]) -> LLMProvider:
         return OpenAIProvider(model=model or os.getenv("OPENAI_MODEL", "gpt-4.1"))
     if kind == "gemini":
         return GeminiProvider(model=model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
+    if kind == "openrouter":
+        return OpenRouterProvider(model=model or os.getenv("OPENROUTER_MODEL", "openai/gpt-4.1"),
+                                  api_key=os.getenv("OPENROUTER_API_KEY"))
     raise ValueError(f"Unknown provider: {kind}")
 
 

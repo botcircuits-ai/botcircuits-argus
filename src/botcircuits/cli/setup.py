@@ -80,6 +80,20 @@ PROVIDER_CATALOG: dict[str, dict] = {
             "gemini-2.5-flash",
         ],
     },
+    "openrouter": {
+        "label": "OpenRouter",
+        "env_var": "OPENROUTER_API_KEY",
+        "api_key_url": "https://openrouter.ai/keys",
+        # OpenRouter model ids are "vendor/model" — a curated cross-vendor
+        # shortlist, not exhaustive; any routed model id works as free text.
+        "models": [
+            "openai/gpt-4.1",
+            "anthropic/claude-3.7-sonnet",
+            "google/gemini-2.5-flash",
+            "deepseek/deepseek-chat",
+            "meta-llama/llama-3.3-70b-instruct",
+        ],
+    },
 }
 
 

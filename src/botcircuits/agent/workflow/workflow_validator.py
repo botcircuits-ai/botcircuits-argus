@@ -127,7 +127,7 @@ def static_issues(doc: dict, *, base_dir: Path | None = None) -> list[str]:
     # from the runtime layer; update alongside `_REGISTRY` / `make_provider`
     # if either grows a new name.
     _VALID_RUNTIMES = {"native", "self", "claude-code", "codex", "openclaw", "hermes"}
-    _VALID_PROVIDERS = {"anthropic", "openai", "gemini"}
+    _VALID_PROVIDERS = {"anthropic", "openai", "gemini", "openrouter"}
     for agent_name, cfg in declared_agents.items():
         if not isinstance(cfg, dict):
             issues.append(
