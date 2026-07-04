@@ -180,7 +180,9 @@ async def fetch_workflows() -> list[dict]:
             {p.stem for p in build_dir.glob("*.json")}
             if build_dir.is_dir() else set()
         )
-        for raw_path in sorted(source_dir.glob("*.json")):
+        source_files = sorted(source_dir.glob("*.json")) \
+            + sorted((source_dir / "coding").glob("*.json"))
+        for raw_path in source_files:
             if raw_path.stem not in built_stems:
                 print(
                     f"[workflow] skipping {raw_path}: no build at "

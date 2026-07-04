@@ -1,6 +1,6 @@
 {
   "name": "safe_agentic_workflow",
-  "description": "SAFe Agentic Workflow (SAW)-modeled software delivery pipeline: task intake -> Business Systems Analyst requirements gate -> frontend/backend/database implementation -> QAS validation gate with per-agent reroute authority (capped at 3 cycles) -> Release Train Engineer PR shepherd (never fixes code, escalates instead) -> System Architect design review -> automated review pass -> human approval/merge, each rejection path routed back to the specific stage at fault -> documentation summary.",
+  "description": "SAFe Agentic Workflow (SAW)-modeled software delivery pipeline: task intake -> Business Systems Analyst requirements gate -> author a task-specific coding workflow (.botcircuits/workflows/coding/<task>_workflow.json) -> run that coding workflow -> QAS validation gate with reroute authority (capped at 3 cycles) -> Release Train Engineer PR shepherd (never fixes code, escalates instead) -> System Architect design review -> automated review pass -> human approval/merge, each rejection path routed back through the coding workflow with the specific findings -> documentation summary.",
   "flow": {
     "start": "start",
     "variables": [
@@ -20,6 +20,16 @@
         "dataType": "boolean"
       },
       {
+        "variableName": "coding_workflow_name",
+        "description": "Name of the task-specific coding workflow authored under .botcircuits/workflows/coding/ (e.g. user_login_workflow).",
+        "dataType": "string"
+      },
+      {
+        "variableName": "revision_findings",
+        "description": "The specific, actionable defect findings (from QAS, the System Architect, automated review, or the human reviewer) the next coding-workflow run must fix. Empty on the first pass.",
+        "dataType": "string"
+      },
+      {
         "variableName": "qas_iteration",
         "description": "Number of QAS validation cycles run against the current implementation.",
         "dataType": "number"
@@ -28,11 +38,6 @@
         "variableName": "qas_approved",
         "description": "Whether QAS validated the implementation against acceptance_criteria.",
         "dataType": "boolean"
-      },
-      {
-        "variableName": "qas_reroute_target",
-        "description": "Which coding agent (frontend, backend, or database) owns the defect QAS found.",
-        "dataType": "string"
       },
       {
         "variableName": "architect_iteration",
@@ -77,7 +82,7 @@
         "settings": {
           "action": "You are a Business Systems Analyst. Review task_description (and any clarification provided since the last pass) and derive acceptance_criteria: a specific, testable definition of done. If the task description already contains clear acceptance criteria, formalize them; if requirements are missing, ambiguous, or too vague to derive testable criteria from, set requirements_complete to false and write down exactly what is missing or unclear. Otherwise set requirements_complete to true. Do not guess at missing requirements — only proceed when they are actually clear."
         },
-        "next": "init_pipeline_state",
+        "next": "author_coding_workflow",
         "conditions": [
           {
             "condition": "requirements_complete is false",
@@ -92,40 +97,33 @@
         },
         "next": "requirements_gate"
       },
+      "author_coding_workflow": {
+        "type": "agentAction",
+        "settings": {
+          "action": "You are the coding-workflow planner. Author the TASK-SPECIFIC coding workflow for this task, following the botcircuits-coding-workflow-authoring skill exactly. Derive a slug-safe task name from task_description (e.g. 'implement user login' -> user_login), write the workflow JSON to .botcircuits/workflows/coding/<task-name>_workflow.json with concrete, ordered implementation steps derived from acceptance_criteria (e.g. db table design -> backend db config -> API endpoint -> UI form -> tests), then build it with `botcircuits workflow build --name <task-name>_workflow`. If a coding workflow for this exact task already exists and is built, reuse it instead of re-authoring. Set coding_workflow_name to the workflow's name (e.g. user_login_workflow). Do NOT implement any application code in this step — only author and build the coding workflow."
+        },
+        "next": "init_pipeline_state"
+      },
       "init_pipeline_state": {
         "type": "systemAction",
         "settings": {
-          "action": "Initialize workflow state for a fresh implementation pass: set qas_iteration to 0, qas_approved to false, architect_iteration to 0, architect_approved to false, automated_review_iteration to 0, automated_review_passed to false, and pr_ready to false."
+          "action": "Initialize workflow state for a fresh implementation pass: set qas_iteration to 0, qas_approved to false, architect_iteration to 0, architect_approved to false, automated_review_iteration to 0, automated_review_passed to false, pr_ready to false, and revision_findings to an empty string."
         },
-        "next": "frontend_coding_agent"
+        "next": "run_coding_workflow"
       },
-      "frontend_coding_agent": {
+      "run_coding_workflow": {
         "type": "agentAction",
         "settings": {
-          "action": "You are a frontend coding agent specializing in UI and client-side logic. Based on acceptance_criteria, implement or fix all frontend components: UI layouts, forms, client-side state management, API call integrations, and input validation. If you are here because QAS, the System Architect, automated review, or the human reviewer rerouted a specific defect to you, fix exactly that defect. Produce complete, working code files and document what you built or changed and which acceptance criteria it addresses."
-        },
-        "next": "backend_coding_agent"
-      },
-      "backend_coding_agent": {
-        "type": "agentAction",
-        "settings": {
-          "action": "You are a backend coding agent specializing in server-side logic and APIs. Based on acceptance_criteria, implement or fix all backend components: API endpoints, business logic services, authentication and authorization, input validation, and integrations with external systems. If you are here because QAS, the System Architect, automated review, or the human reviewer rerouted a specific defect to you, fix exactly that defect. Produce complete, working code files and document what you built or changed and which acceptance criteria it addresses."
-        },
-        "next": "database_coding_agent"
-      },
-      "database_coding_agent": {
-        "type": "agentAction",
-        "settings": {
-          "action": "You are a database coding agent specializing in data modeling and persistence. Based on acceptance_criteria, implement or fix all database components: schema definitions, migrations, indexes, queries, and the data access layer. If you are here because QAS, the System Architect, automated review, or the human reviewer rerouted a specific defect to you, fix exactly that defect. Produce complete, working code files and document what you built or changed and which acceptance criteria it addresses."
+          "action": "Execute the task-specific coding workflow by running: `botcircuits workflow run --name <coding_workflow_name> --initial-args '{\"task_description\": <task_description>, \"acceptance_criteria\": <acceptance_criteria>, \"revision_findings\": <revision_findings>}'` (JSON-escape the values; pass revision_findings as an empty string on the first pass). The coding workflow's own deterministic engine drives the implementation steps. Do NOT implement code yourself outside that run. When it finishes, report what was built or fixed and which acceptance criteria it addresses; if the run reports failure, state exactly what failed."
         },
         "next": "qas_validation"
       },
       "qas_validation": {
         "type": "agentAction",
         "settings": {
-          "action": "You are the Quality Assurance Specialist (QAS) and hold iteration authority over this pipeline. Increment qas_iteration by 1. Validate the current implementation from the frontend, backend, and database agents against every item in acceptance_criteria. If every criterion is met, set qas_approved to true. Otherwise set qas_approved to false, identify precisely which acceptance criterion failed and in which layer the defect lives, and set qas_reroute_target to exactly one of `frontend`, `backend`, or `database` — whichever agent owns the fix. Write specific, actionable findings for that agent."
+          "action": "You are the Quality Assurance Specialist (QAS) and hold iteration authority over this pipeline. Increment qas_iteration by 1. Validate the implementation produced by the coding workflow against every item in acceptance_criteria. If every criterion is met, set qas_approved to true and clear revision_findings. Otherwise set qas_approved to false and set revision_findings to specific, actionable findings: which acceptance criterion failed, in which file/layer the defect lives, and what must change — precise enough that the coding workflow can fix exactly that defect on its next run."
         },
-        "next": "frontend_coding_agent",
+        "next": "run_coding_workflow",
         "conditions": [
           {
             "condition": "qas_approved is true",
@@ -138,25 +136,13 @@
           {
             "condition": "qas_iteration exceeds 3",
             "next": "pr_shepherd"
-          },
-          {
-            "condition": "qas_reroute_target is frontend",
-            "next": "frontend_coding_agent"
-          },
-          {
-            "condition": "qas_reroute_target is backend",
-            "next": "backend_coding_agent"
-          },
-          {
-            "condition": "qas_reroute_target is database",
-            "next": "database_coding_agent"
           }
         ]
       },
       "pr_shepherd": {
         "type": "agentAction",
         "settings": {
-          "action": "You are the Release Train Engineer, acting as PR shepherd. You do NOT write, fix, or modify code. Summarize the changes made by the frontend, backend, and database agents, and confirm QAS sign-off from qas_approved. If qas_approved is true, set pr_ready to true and prepare a PR summary for review. If qas_approved is false (the QAS cycle cap was reached without approval), do not attempt to fix anything yourself — set pr_ready to false and write an escalation summary describing exactly which acceptance criteria remain unresolved and why."
+          "action": "You are the Release Train Engineer, acting as PR shepherd. You do NOT write, fix, or modify code. Summarize the changes made by the coding workflow runs, and confirm QAS sign-off from qas_approved. If qas_approved is true, set pr_ready to true and prepare a PR summary for review. If qas_approved is false (the QAS cycle cap was reached without approval), do not attempt to fix anything yourself — set pr_ready to false and write an escalation summary describing exactly which acceptance criteria remain unresolved and why."
         },
         "next": "architect_review",
         "conditions": [
@@ -176,9 +162,9 @@
       "architect_review": {
         "type": "agentAction",
         "settings": {
-          "action": "You are the System Architect. Increment architect_iteration by 1. Review the implementation at the architecture/design level: component boundaries, integration correctness between frontend/backend/database, consistency with existing system design, and technical debt introduced. This is distinct from QAS's acceptance-criteria-level review — evaluate structure and design quality, not just whether acceptance criteria pass. If the design is sound, set architect_approved to true. Otherwise set architect_approved to false and write specific findings describing what must change and which layer is affected."
+          "action": "You are the System Architect. Increment architect_iteration by 1. Review the implementation at the architecture/design level: component boundaries, integration correctness across the layers the coding workflow touched, consistency with existing system design, and technical debt introduced. This is distinct from QAS's acceptance-criteria-level review — evaluate structure and design quality, not just whether acceptance criteria pass. If the design is sound, set architect_approved to true. Otherwise set architect_approved to false and set revision_findings to specific findings describing what must change and where."
         },
-        "next": "frontend_coding_agent",
+        "next": "run_coding_workflow",
         "conditions": [
           {
             "condition": "architect_approved is true",
@@ -197,9 +183,9 @@
       "automated_review": {
         "type": "agentAction",
         "settings": {
-          "action": "Run the automated review pass: lint, style, and cross-file consistency checks across all changed frontend, backend, and database code. Increment automated_review_iteration by 1. If no blocking issues are found, set automated_review_passed to true. Otherwise set automated_review_passed to false and list the specific blocking issues found."
+          "action": "Run the automated review pass: lint, style, and cross-file consistency checks across all code changed by the coding workflow. Increment automated_review_iteration by 1. If no blocking issues are found, set automated_review_passed to true. Otherwise set automated_review_passed to false and set revision_findings to the specific blocking issues found."
         },
-        "next": "frontend_coding_agent",
+        "next": "run_coding_workflow",
         "conditions": [
           {
             "condition": "automated_review_passed is true",
@@ -251,9 +237,9 @@
       "reset_for_recode": {
         "type": "systemAction",
         "settings": {
-          "action": "Reset qas_iteration to 0, qas_approved to false, architect_iteration to 0, architect_approved to false, automated_review_iteration to 0, automated_review_passed to false, and pr_ready to false, so the full validation pipeline re-runs after the human-flagged coding defect is fixed."
+          "action": "Set revision_findings to the human reviewer's rejection comments. Reset qas_iteration to 0, qas_approved to false, architect_iteration to 0, architect_approved to false, automated_review_iteration to 0, automated_review_passed to false, and pr_ready to false, so the full validation pipeline re-runs after the coding workflow fixes the human-flagged defect."
         },
-        "next": "frontend_coding_agent"
+        "next": "run_coding_workflow"
       },
       "reset_for_qas": {
         "type": "systemAction",
@@ -272,7 +258,7 @@
       "documentation_agent": {
         "type": "agentAction",
         "settings": {
-          "action": "You are a documentation agent. Write a comprehensive implementation summary document with these sections: 1) What Was Built — feature overview and all components delivered, 2) Architecture — how the frontend, backend, and database layers integrate, informed by the System Architect's findings, 3) Acceptance Criteria Checklist — confirm each item in acceptance_criteria and its status, 4) Setup and Deployment Instructions — step-by-step guide to run or deploy the implementation, 5) Review History — summarize every QAS reroute (which agent, why), every architect finding, every automated review issue, and the human approval decision, 6) Future Improvements — recommended follow-up work. Ground every statement in acceptance_criteria and the actual code and findings produced during the pipeline."
+          "action": "You are a documentation agent. Write a comprehensive implementation summary document with these sections: 1) What Was Built — feature overview and all components delivered, 2) Coding Workflow — the task-specific coding workflow used (coding_workflow_name) and its step outline, 3) Architecture — how the implemented layers integrate, informed by the System Architect's findings, 4) Acceptance Criteria Checklist — confirm each item in acceptance_criteria and its status, 5) Setup and Deployment Instructions — step-by-step guide to run or deploy the implementation, 6) Review History — summarize every QAS finding and coding-workflow rerun, every architect finding, every automated review issue, and the human approval decision, 7) Future Improvements — recommended follow-up work. Ground every statement in acceptance_criteria and the actual code and findings produced during the pipeline."
         }
       }
     }

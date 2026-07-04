@@ -22,8 +22,12 @@ from pathlib import Path
 
 from botcircuits.cli.ansi import C, out
 
-#: The two skills that teach a host agent to author + run workflows.
-_SKILLS = ("botcircuits-workflow-authoring", "botcircuits-workflow-running")
+#: The skills that teach a host agent to author + run workflows.
+_SKILLS = (
+    "botcircuits-workflow-authoring",
+    "botcircuits-coding-workflow-authoring",
+    "botcircuits-workflow-running",
+)
 
 #: Per-agent default skills directories.
 _AGENT_TARGETS = {

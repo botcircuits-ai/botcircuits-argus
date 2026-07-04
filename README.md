@@ -29,11 +29,12 @@ An agent skill (Claude, Hermes, etc.) that runs your repetitive workflows **pred
 
 ## How it works
 
-Argus ships **two skills** your agent loads:
+Argus ships **three skills** your agent loads:
 
 | Skill | The user says… | The agent does… |
 |---|---|---|
 | **botcircuits-workflow-authoring** | _"create an order fulfillment workflow with …"_ | Writes the workflow JSON and **builds** it into a runnable state machine. |
+| **botcircuits-coding-workflow-authoring** | _"implement user login"_ (any coding task) | Authors a **task-specific coding workflow** under `.botcircuits/workflows/coding/<task>_workflow.json`, builds it, and runs it through the standing `safe_agentic_workflow` delivery pipeline (requirements gate → coding → QAS → architect → automated review → human approval). |
 | **botcircuits-workflow-running** | _"run order fulfillment"_ | Runs the workflow — the **deterministic engine** drives navigation in the background and dispatches each action to the AI agent. |
 
 ---

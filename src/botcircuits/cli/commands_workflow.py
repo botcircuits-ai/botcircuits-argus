@@ -675,8 +675,10 @@ def _locate_workflow_file(workflow_name: str) -> tuple[Path, dict]:
     """Find the workflow.json file that matches `workflow_name`.
 
     Strategy:
-      1. Try `<dir>/<workflow_name>.json` directly.
-      2. Otherwise scan every `*.json` and match on its `name` field.
+      1. Try `<dir>/<workflow_name>.json` directly, then the
+         `coding/` subdirectory (task-specific coding workflows).
+      2. Otherwise scan every `*.json` (top level + `coding/`) and
+         match on its `name` field.
     """
     directory = _resolve_workflows_dir()
     if not directory.is_dir():
@@ -685,11 +687,16 @@ def _locate_workflow_file(workflow_name: str) -> tuple[Path, dict]:
             f"Set ${WORKFLOWS_DIR_ENV} or create {DEFAULT_WORKFLOWS_DIR}/."
         )
 
-    direct = directory / f"{workflow_name}.json"
-    if direct.exists():
-        return direct, _load_json(direct)
+    for direct in (
+        directory / f"{workflow_name}.json",
+        directory / "coding" / f"{workflow_name}.json",
+    ):
+        if direct.exists():
+            return direct, _load_json(direct)
 
-    for path in sorted(directory.glob("*.json")):
+    candidates = sorted(directory.glob("*.json")) \
+        + sorted((directory / "coding").glob("*.json"))
+    for path in candidates:
         try:
             data = _load_json(path)
         except LocalWorkflowError:
