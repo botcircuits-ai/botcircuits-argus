@@ -18,6 +18,9 @@ import json
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Union
 
+from botcircuits.agent.permissions import Decision, PermissionSet
+from botcircuits.agent.tools.builtins import _confirm
+
 ToolHandler = Callable[..., Union[Any, Awaitable[Any]]]
 
 
@@ -31,8 +34,9 @@ class LocalTool:
 
 
 class ToolRegistry:
-    def __init__(self) -> None:
+    def __init__(self, permissions: PermissionSet | None = None) -> None:
         self._tools: dict[str, LocalTool] = {}
+        self.permissions = permissions or PermissionSet()
 
     def register(self, tool: LocalTool) -> None:
         self._tools[tool.name] = tool
@@ -72,10 +76,41 @@ class ToolRegistry:
         """
         if name not in self._tools:
             return f"Unknown tool: {name}", True
+
+        decision = self.permissions.evaluate(name, args or {})
+        if decision == Decision.DENY:
+            return (
+                f"Permission denied: a deny rule blocks this `{name}` call. "
+                "Do not retry with different arguments; ask the user to "
+                "adjust permissions if this should be allowed.",
+                True,
+            )
+        if decision == Decision.ASK:
+            workflow_bg = (context or {}).get("_workflow_bg")
+            allowed = await _confirm.confirm(
+                f"{name} requires approval (permission rule):",
+                [f"args: {json.dumps(args or {}, default=str)}"],
+                prompt="allow? [y/N]: ",
+                workflow_bg=workflow_bg,
+            )
+            if not allowed:
+                return (
+                    f"User denied the `{name}` call (permission ask rule). "
+                    "Do not retry the same arguments; ask the user what to "
+                    "change.",
+                    True,
+                )
+
         try:
             handler = self._tools[name].handler
             if _handler_accepts_context(handler):
-                result = handler(args or {}, context or {})
+                call_context = dict(context or {})
+                if decision in (Decision.ALLOW, Decision.ASK):
+                    # A permission rule already decided (and, for ASK, the
+                    # user already confirmed above) — skip the tool's own
+                    # y/N gate so the user isn't prompted twice.
+                    call_context["permission_preapproved"] = True
+                result = handler(args or {}, call_context)
             else:
                 result = handler(args or {})
             if inspect.isawaitable(result):

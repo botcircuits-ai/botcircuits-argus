@@ -18,6 +18,7 @@ import asyncio
 import json
 from pathlib import Path
 from typing import AsyncIterator, Literal
+from uuid import uuid4
 
 from botcircuits.providers.base import LLMProvider
 from botcircuits.types import LLMResponse, Message, StreamEvent, ToolCall
@@ -54,10 +55,16 @@ _MAX_SEGMENT_TURNS = 25
 
 MAX_AGENT_STEPS = 500
 
-# Synthetic id prefix for the workflow tool calls the loop injects to
-# advance an active workflow after the model stops acting. Lets us tell
-# loop-injected calls apart from model-issued ones in history if needed.
-_AUTO_RECALL_ID_PREFIX = "wf-autorecall-"
+# Provider short-names `make_provider` can build an in-process client for.
+# A workflow agent binding whose `provider` isn't one of these (e.g. it only
+# pins a CLI `runtime` like claude-code) falls back to the run's default
+# provider under the native runtime — native never spawns an external CLI.
+_IN_PROCESS_PROVIDERS = frozenset({"anthropic", "openai", "gemini", "openrouter"})
+
+# Synthetic id prefix for the workflow tool call the loop injects to resume
+# a paused workflow on the user's next message. Lets us tell loop-injected
+# calls apart from model-issued ones in history if needed.
+_AUTO_RESUME_ID_PREFIX = "wf-autoresume-"
 
 # Truncation cap on the last-assistant-message we hand to tools via context.
 # Variable normalization (the workflow tool's main consumer of this field)
@@ -99,65 +106,6 @@ def _last_user_text(messages: list[Message]) -> str:
                     return text[:_CONTEXT_LAST_ASSISTANT_CHARS] + "…"
                 return text
     return ""
-
-
-def _available_workflow_tools(reg: ToolRegistry) -> list[tuple[str, str]]:
-    """Return (name, description) for every workflow tool on `reg`.
-
-    Workflow tools are tagged with `_workflow_state` by `workflow_tool()`,
-    which is how we tell them apart from built-ins and MCP tools.
-    """
-    out: list[tuple[str, str]] = []
-    for tool in reg.all():
-        if getattr(tool, "_workflow_state", None) is None:
-            continue
-        out.append((tool.name, tool.description or ""))
-    return out
-
-
-def _with_workflow_reminder(system: str | None, reg: ToolRegistry) -> str | None:
-    """Append a workflow-related reminder to `system`.
-
-    In engine-driven mode the ENGINE owns the loop once a workflow starts,
-    so the only reminders that matter are about *triggering* and *resuming*:
-
-      - A workflow is paused waiting on the user (its `session_id` is set
-        during an engine user-interaction pause): the user's latest message
-        is the answer — re-call the workflow tool so the engine resumes.
-      - No workflow is active but workflow tools exist: calling the matching
-        tool MUST be the first action when the user's request matches one —
-        don't ask clarifying questions in prose first; the workflow drives
-        the conversation itself.
-    """
-    names = active_workflow_names(reg)
-    if names:
-        name = names[0]
-        reminder = (
-            f"\n\n[Active workflow] The workflow '{name}' is paused waiting "
-            f"for the user's reply. Treat the user's latest message as that "
-            f"answer and call '{name}' again to resume the workflow."
-        )
-        return (system or "") + reminder
-
-    available = _available_workflow_tools(reg)
-    if not available:
-        return system
-    lines = [f"  - '{n}': {d}" for n, d in available]
-    reminder = (
-        "\n\n[Available workflows] The following workflow tools are "
-        "registered:\n"
-        + "\n".join(lines)
-        + "\n\nCalling the matching workflow tool is MANDATORY and MUST be "
-        "your VERY FIRST action whenever the user's request matches one of "
-        "the workflows above. Do NOT ask clarifying questions in prose "
-        "first — the workflow itself drives the conversation (its first "
-        "step may ask the user for inputs). Call the tool with empty args "
-        "`{}` to begin; the tool will return the next step to perform. "
-        "Do not imitate earlier turns where you appeared to ask a question "
-        "directly — that question came from the workflow tool's output, "
-        "not from you skipping the call."
-    )
-    return (system or "") + reminder
 
 
 def _fired_workflow_tool(reg: ToolRegistry, tool_calls: list[ToolCall]) -> bool:
@@ -230,9 +178,20 @@ class Agent:
         store: ConversationStore | None = None,
         enable_workflows: bool = True,
         mode: Literal["native", "react"] = "native",
+        agents_config: dict[str, dict] | None = None,
     ):
         self.provider = provider
         self.user_tools = tools or ToolRegistry()
+        # Agent name -> {"provider": "openai", "model": "..."} for workflow
+        # steps pinned to a named agent. When a segment is pinned to one of
+        # these AND the binding names an in-process provider we can build, the
+        # in-process runner swaps to that provider/model for JUST that segment
+        # (see `_resolve_segment_provider`). Bindings that only name a CLI
+        # runtime (e.g. claude-code) or an alias we can't build fall back to
+        # `self.provider` — native never spawns a CLI here. Cached by
+        # (provider, model) so agents sharing a binding reuse one client.
+        self._agents_config = agents_config or {}
+        self._provider_cache: dict[tuple[str, str | None], LLMProvider] = {}
         self.skills = skills or []
         self.max_tokens = max_tokens
         self.max_steps = max_steps
@@ -246,8 +205,7 @@ class Agent:
         #     a visible reasoning trace, at the cost of parse brittleness.
         self.mode = mode
         # When False, workflow tools registered on the registry are
-        # hidden from the provider call and the workflow-related
-        # system-prompt reminder is suppressed. The tools stay in the
+        # hidden from the provider call entirely. The tools stay in the
         # registry (so other code can still inspect them) — only the
         # surface exposed to the LLM changes. Default True keeps the
         # existing behavior for every caller that doesn't ask
@@ -281,7 +239,11 @@ class Agent:
         self.hosted_mcp = [s for s in servers if s.mode == "hosted"]
         self._local_mcp = LocalMCPManager([s for s in servers if s.mode == "local"])
         self._tools_built = False
-        self.tools = ToolRegistry()
+        # Carry over the permission rules from the caller's registry (set
+        # via `default_registry(..., permissions=...)`) — `start()` below
+        # re-registers each LocalTool individually into this fresh
+        # registry, which would otherwise silently drop them.
+        self.tools = ToolRegistry(permissions=self.user_tools.permissions)
 
     # -- async lifecycle ----------------------------------------------------
 
@@ -340,7 +302,7 @@ class Agent:
         the model sees changes.
 
         In ReAct mode this returns [] — tools are described in the
-        system prompt instead (see `_react_tools` / `_system_with_reminder`),
+        system prompt instead (see `_react_tools` / `_system_for_call`),
         so the provider gets no structured tool spec.
         """
         if self.mode == "react":
@@ -357,17 +319,18 @@ class Agent:
         return [t for t in all_tools
                 if getattr(t, "_workflow_state", None) is None]
 
-    def _system_with_reminder(self, system: str | None) -> str | None:
+    def _system_for_call(self, system: str | None) -> str | None:
         """System prompt with mode-specific blocks attached.
 
-        Native mode appends the workflow reminder (unless workflows are
-        disabled). ReAct mode additionally appends the tool preamble that
-        teaches the Thought/Action/Action Input format — without it the
-        model has no way to know which tools exist, since they never reach
-        the provider's tool API.
+        ReAct mode appends the tool preamble that teaches the
+        Thought/Action/Action Input format — without it the model has no
+        way to know which tools exist, since they never reach the
+        provider's tool API. Native mode returns `system` unchanged:
+        workflow tools are presented like any other tool (name +
+        description), and an already-paused workflow is resumed directly
+        by the loop (see `_resume_active_workflow`), not via a prompt
+        reminder telling the model to re-call it.
         """
-        if self.enable_workflows:
-            system = _with_workflow_reminder(system, self.tools)
         if self.mode == "react":
             preamble = render_react_preamble(self._react_tools())
             if preamble:
@@ -462,6 +425,7 @@ class Agent:
         data_variables: list[dict] | None = None,
         provider: LLMProvider | None = None,
         event_sink=None,
+        workflow_bg=None,
     ) -> SegmentResult:
         """Run ONE branch-delimited segment: a constant-size cached system
         prompt + the segment payload, looped over provider calls until the
@@ -507,6 +471,7 @@ class Agent:
             actions, branch_variables, system_notes,
             item_variables=item_variables,
             data_variables=data_variables,
+            slots=slots,
         )
         messages: list[Message] = [
             Message(role="user", blocks=[{"type": "text", "text": user_msg}]),
@@ -563,12 +528,14 @@ class Agent:
                     out, err = await self.tools_run_synthetic(record_item_list, tc)
                     recorded_items = True
                 elif tc.name == HUMAN_FEEDBACK_TOOL:
-                    out, err = await self.tools.run(tc.name, tc.arguments, None)
+                    hf_ctx = {"_workflow_bg": workflow_bg} if workflow_bg is not None else None
+                    out, err = await self.tools.run(tc.name, tc.arguments, hf_ctx)
                     paused_question = _human_feedback_pause([tc], [(out, err)])
                 else:
-                    out, err = await self.tools.run(tc.name, tc.arguments, {
-                        "session_id": None,
-                    })
+                    tool_ctx: dict = {"session_id": None}
+                    if workflow_bg is not None:
+                        tool_ctx["_workflow_bg"] = workflow_bg
+                    out, err = await self.tools.run(tc.name, tc.arguments, tool_ctx)
                 results.append((out, err))
                 if event_sink is not None:
                     await event_sink("tool_result", (tc, out, err))
@@ -596,28 +563,85 @@ class Agent:
             captured_items=list(item_sink.get("items", [])),
         )
 
-    def _make_segment_runner(self, event_sink=None):
+    def _make_segment_runner(self, event_sink=None, workflow_bg=None):
         """A `run_segment` callable for the tool context, bound to this
         agent. Engine-disabled agents return None so the workflow tool falls
         back to its legacy per-step path.
 
         `event_sink`, when given (streaming path), forwards segment events
         so the UI stays live during an engine-driven workflow.
+
+        `workflow_bg`, when given, is a `WorkflowTask` whose channel the
+        `human_feedback` tool uses to block the background coroutine and
+        await the user's reply on the main thread instead of returning a
+        `paused` signal up the stack.
         """
         if not self.enable_workflows:
             return None
 
         async def _runner(*, actions, branch_variables, system_notes, slots,
-                          item_variables=None):
+                          item_variables=None, data_variables=None, agent=None):
+            # A segment pinned to a named agent gets that agent's in-process
+            # provider/model when the binding resolves to one we can build;
+            # otherwise `provider` is None and `_run_segment` uses the default.
+            # Accepting `agent` here (the engine passes it only for pinned
+            # segments) is what lets the native runtime honor a workflow's
+            # per-agent `model` — without it the engine call would TypeError.
             return await self._run_segment(
                 actions=actions,
                 branch_variables=branch_variables,
                 system_notes=system_notes,
                 slots=slots,
                 item_variables=item_variables,
+                data_variables=data_variables,
+                provider=self._resolve_segment_provider(agent),
                 event_sink=event_sink,
+                workflow_bg=workflow_bg,
             )
         return _runner
+
+    def _resolve_segment_provider(self, agent: str | None) -> "LLMProvider | None":
+        """The in-process `LLMProvider` a segment pinned to `agent` should use,
+        or None to fall back to `self.provider`.
+
+        Per the native routing contract, we only override when the agent's
+        binding names something we can actually build in-process: a `provider`
+        key (e.g. `{"provider": "openai", "model": "gpt-4.1"}`). Bindings that
+        only pin a CLI `runtime` (e.g. claude-code) — or whose model is an
+        alias `make_provider` can't turn into a client — fall through to the
+        default provider rather than crashing, since native never spawns the
+        external CLI itself. Cached by (provider, model).
+        """
+        cfg = self._agents_config.get(agent) if agent else None
+        if not isinstance(cfg, dict) or not cfg:
+            return None
+        kind = cfg.get("provider")
+        # No explicit in-process provider (e.g. only a `runtime`/CLI model
+        # alias) — keep the run's default provider.
+        if not kind:
+            return None
+        # `make_provider` maps any unknown name to Anthropic rather than
+        # raising, so whitelist the kinds we can actually build in-process;
+        # an unrecognized binding falls back to the default provider instead
+        # of silently switching vendors.
+        if kind not in _IN_PROCESS_PROVIDERS:
+            print(f"[native] agent '{agent}' provider '{kind}' is not an "
+                  f"in-process provider; using default provider.")
+            return None
+        model = cfg.get("model")
+        key = (kind, model)
+        cached = self._provider_cache.get(key)
+        if cached is None:
+            from botcircuits.providers import make_provider
+            try:
+                cached = make_provider(kind, model)
+            except Exception as e:  # unbuildable (missing key, bad model, …)
+                print(f"[native] agent '{agent}' provider "
+                      f"'{kind}' unavailable ({type(e).__name__}: {e}); "
+                      f"using default provider.")
+                return None
+            self._provider_cache[key] = cached
+        return cached
 
     @staticmethod
     async def tools_run_synthetic(tool, tc: ToolCall) -> tuple[str, bool]:
@@ -633,6 +657,56 @@ class Agent:
             return text, False
         except Exception as e:  # pragma: no cover - defensive
             return f"{type(e).__name__}: {e}", True
+
+    # -- workflow resume ----------------------------------------------------
+
+    async def _resume_active_workflow(
+        self,
+        convo,
+        *,
+        event_sink=None,
+    ) -> tuple[ToolCall, str, bool] | None:
+        """If a workflow is paused waiting on the user, resume it directly —
+        no provider call, no model decision involved.
+
+        `active_workflow_names` is non-empty only between an engine
+        user-interaction pause and its resolution (see `workflow_tool`'s
+        `_run_engine`), so by construction the just-appended user message IS
+        the answer to that pause. Resuming is therefore deterministic: call
+        the SAME tool handler the model would have called, with the SAME
+        `run_segment` callback, but trigger it from the loop itself instead
+        of waiting for (and prompting for) a model tool-call decision.
+
+        Returns `(tool_call, output, is_error)` for the synthetic call so
+        callers can append it to history / stream it like any other tool
+        round, or `None` when no workflow is paused.
+        """
+        from botcircuits.agent.workflow import active_workflow_names
+
+        if not self.enable_workflows:
+            return None
+        names = active_workflow_names(self.tools)
+        if not names:
+            return None
+        name = names[0]
+
+        tc = ToolCall(id=f"{_AUTO_RESUME_ID_PREFIX}{uuid4().hex[:8]}",
+                      name=name, arguments={})
+        tool_context = {
+            "last_assistant_message": _last_assistant_text(convo.messages),
+            "last_user_message": _last_user_text(convo.messages),
+            "session_id": convo.session_id,
+            "run_segment": self._make_segment_runner(event_sink=event_sink),
+            "event_sink": event_sink,
+        }
+        out, err = await self.tools.run(tc.name, tc.arguments, tool_context)
+
+        convo.messages.append(Message(role="assistant", blocks=[{
+            "type": "tool_call", "id": tc.id, "name": tc.name,
+            "arguments": tc.arguments, "thought_signature": None,
+        }]))
+        convo.messages.append(self._result_message([tc], [(out, err)]))
+        return tc, out, err
 
     # -- non-streaming chat -------------------------------------------------
 
@@ -650,10 +724,17 @@ class Agent:
                 blocks=[{"type": "text", "text": user_input}],
             ))
 
+            # A paused workflow's resume doesn't need a model decision — the
+            # user's message we just appended IS the answer. Resume it
+            # directly so the next provider call (below) sees the result and
+            # relays/acts on it, instead of asking the model to notice the
+            # pause and re-call the tool itself.
+            await self._resume_active_workflow(convo)
+
             for _ in range(self.max_steps):
                 self.provider.usage_purpose = "conversational"
                 resp = await self.provider.complete(
-                    system=self._system_with_reminder(convo.system),
+                    system=self._system_for_call(convo.system),
                     messages=convo.messages,
                     tools=self._exposed_tools(),
                     hosted_mcp=self.hosted_mcp, skills=self.skills,
@@ -740,13 +821,45 @@ class Agent:
             ))
 
             try:
+                # A paused workflow's resume doesn't need a model decision —
+                # the user's message we just appended IS the answer. Resume
+                # it directly (streaming its own segment events) so the next
+                # provider call below sees the result and relays/acts on it,
+                # instead of asking the model to notice the pause and re-call
+                # the tool itself.
+                resume_events: asyncio.Queue = asyncio.Queue()
+
+                async def _resume_sink(kind: str, payload):
+                    await resume_events.put((kind, payload))
+
+                resume_task = asyncio.ensure_future(
+                    self._resume_active_workflow(convo, event_sink=_resume_sink)
+                )
+                while not resume_task.done() or not resume_events.empty():
+                    drainer = asyncio.ensure_future(resume_events.get())
+                    done, _ = await asyncio.wait(
+                        {resume_task, drainer}, return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if drainer in done:
+                        kind, payload = drainer.result()
+                        for ev in _segment_stream_events(kind, payload, sid):
+                            yield ev
+                    else:
+                        drainer.cancel()
+                resumed = resume_task.result()
+                if resumed is not None:
+                    tc, out, err = resumed
+                    yield StreamEvent(type="tool_call", tool_call=tc, session_id=sid)
+                    yield StreamEvent(type="tool_result", tool_call_id=tc.id,
+                                      text=out, is_error=err, session_id=sid)
+
                 final_text = ""
                 hit_step_limit = True
                 for _ in range(self.max_steps):
                     final_resp: LLMResponse | None = None
                     self.provider.usage_purpose = "conversational"
                     async for kind, payload in self.provider.stream(
-                        system=self._system_with_reminder(convo.system),
+                        system=self._system_for_call(convo.system),
                         messages=convo.messages,
                         tools=self._exposed_tools(),
                         hosted_mcp=self.hosted_mcp,

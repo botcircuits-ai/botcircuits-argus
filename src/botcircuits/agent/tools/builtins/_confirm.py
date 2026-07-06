@@ -50,11 +50,40 @@ def warn(title: str, lines: list[str]) -> None:
     sys.stderr.flush()
 
 
-async def confirm(title: str, lines: list[str], prompt: str = "run? [y/N]: ") -> bool:
-    """Prompt on stderr, read y/N from stdin in an executor so the event
-    loop keeps spinning. Default is deny (Enter / anything not y/yes)."""
-    sys.stderr.write(_format_block(title, lines))
-    sys.stderr.write(color("33", f"      {prompt}"))
+async def confirm(title: str, lines: list[str], prompt: str = "run? [y/N]: ",
+                  workflow_bg=None) -> bool:
+    """Show the proposal block immediately, then pause for y/N.
+
+    The block (title + lines) is always printed right away via print() so
+    it appears in the output stream before the input prompt changes.  Only
+    the bare y/N question is sent to the pause channel — this way the user
+    sees the full plan/proposal before being asked to approve it, regardless
+    of whether a TUISession or a background workflow channel is active.
+
+    Routing for the y/N read:
+    1. `workflow_bg` set → WorkflowTask.pause() → TUISession.pause().
+    2. Active TUISession → TUISession.pause() directly.
+    3. Plain terminal (no TUI) → stderr write + executor input().
+    """
+    # Print the proposal block immediately to stdout so it's visible
+    # before we block waiting for input.
+    print(_format_block(title, lines), end="", flush=True)
+
+    if workflow_bg is not None:
+        answer = await workflow_bg.pause(prompt)
+        return answer.strip().lower() in ("y", "yes")
+
+    try:
+        from botcircuits.cli.tui import get_tui_session
+        tui = get_tui_session()
+    except ImportError:
+        tui = None
+
+    if tui is not None:
+        answer = await tui.pause(prompt)
+        return answer.strip().lower() in ("y", "yes")
+
+    sys.stderr.write(f"      {prompt}")
     sys.stderr.flush()
     loop = asyncio.get_running_loop()
     try:
