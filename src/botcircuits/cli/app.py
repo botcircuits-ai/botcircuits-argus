@@ -43,11 +43,11 @@ import os
 import sys
 from typing import Optional
 
-from botcircuits.agent import Agent, default_registry, register_workflows
-from botcircuits.agent.workflow import LocalWorkflowError
-from botcircuits.providers import (
-    AnthropicProvider, GeminiProvider, OpenAIProvider, OpenRouterProvider,
+from botcircuits.agent import (
+    Agent, default_registry, register_workflows, collect_agents_config,
 )
+from botcircuits.agent.workflow import LocalWorkflowError
+from botcircuits.providers import AnthropicProvider, GeminiProvider, OpenAIProvider, OpenRouterProvider
 from botcircuits.providers.base import LLMProvider
 from botcircuits.cli.ansi import C, out
 from botcircuits.cli.commands import CLIState, handle_slash
@@ -62,6 +62,7 @@ from botcircuits.cli.render import run_blocking, run_streaming
 from botcircuits.cli.settings import load_layered_settings
 from botcircuits.cli.setup import add_setup_subparser, run_setup_wizard
 from botcircuits.cli.system_prompt import DEFAULT_SYSTEM_PROMPT
+from botcircuits.cli.tui import TUISession, set_tui_session
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +157,7 @@ def load_cli_config(args: argparse.Namespace) -> CLIConfig:
         ./.botcircuits/settings.json           (project, shared)
         ./.botcircuits/settings.local.json     (project, gitignored)
         --config <path>                        (explicit override)
+        $LLM_PROVIDER                          (provider only; see below)
         CLI flags                              (highest)
 
     `--auto` is special: it doesn't have its own CLIConfig field, it
@@ -165,6 +167,30 @@ def load_cli_config(args: argparse.Namespace) -> CLIConfig:
     """
     file_values, _used = load_layered_settings(explicit=args.config)
     cli_values = {k: getattr(args, k) for k in _CHAT_FLAGS}
+    # `provider` also has an env-var form ($LLM_PROVIDER, same as the
+    # gateway's lifespan()) so a provider switch doesn't require editing
+    # settings.json — without this, a stale "provider" key written by an
+    # earlier `setup llm` run would silently outrank $LLM_PROVIDER, since
+    # `resolve()` only lets CLI-equivalent values (non-None here) override
+    # file values, and $LLM_PROVIDER was previously only wired into
+    # `DEFAULTS`, the lowest-precedence layer. --provider still wins over
+    # the env var when both are given.
+    resolved_provider = args.provider or os.getenv("LLM_PROVIDER")
+    cli_values["provider"] = resolved_provider
+
+    # `model` in settings.json is only meaningful paired with the provider
+    # that was active when it was written. If the provider just got
+    # overridden above (env var or --provider) away from whatever
+    # settings.json's own "provider" says, that file's "model" almost
+    # certainly belongs to the OLD provider (e.g. an OpenRouter model id
+    # surviving a switch to openai) — so drop it unless the user also gave
+    # --model explicitly. `make_provider()` then falls through to that
+    # provider's own env var / hardcoded default instead.
+    if (resolved_provider and args.model is None
+            and file_values.get("provider") not in (None, resolved_provider)):
+        file_values = dict(file_values)
+        file_values.pop("model", None)
+
     cfg = resolve(file_values, cli_values)
 
     if args.auto is not None:
@@ -200,44 +226,9 @@ def make_provider(kind: str, model: Optional[str]) -> LLMProvider:
         return GeminiProvider(model=model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
     if kind == "openrouter":
         return OpenRouterProvider(model=model or os.getenv("OPENROUTER_MODEL", "openai/gpt-4.1"),
-                                  api_key=os.getenv("OPENROUTER_API_KEY"))
+                                   api_key=os.getenv("OPENROUTER_API_KEY"))
     raise ValueError(f"Unknown provider: {kind}")
 
-
-# ---------------------------------------------------------------------------
-# Input handling — non-blocking line reads + multi-line paste support
-# ---------------------------------------------------------------------------
-
-async def read_line(prompt: str) -> Optional[str]:
-    """Read one line from stdin without blocking the event loop.
-    Returns None on EOF (Ctrl-D)."""
-    loop = asyncio.get_running_loop()
-    try:
-        return await loop.run_in_executor(None, lambda: input(prompt))
-    except EOFError:
-        return None
-    except KeyboardInterrupt:
-        out()                     # newline after the ^C
-        return ""                 # treat as empty line; outer loop ignores
-
-
-async def read_user_message(interactive: bool) -> Optional[str]:
-    """One user 'message' = one line, OR a multi-line block delimited by '\"\"\"'.
-    Returns None on EOF."""
-    first = await read_line(C.bold(C.green("you> ")) if interactive else "")
-    if first is None:
-        return None
-    stripped = first.strip()
-    if stripped == '"""':
-        # Multi-line block: read until the closing """
-        lines = []
-        while True:
-            ln = await read_line(C.dim("... "))
-            if ln is None or ln.strip() == '"""':
-                break
-            lines.append(ln)
-        return "\n".join(lines)
-    return first
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +247,7 @@ async def amain(args: argparse.Namespace) -> int:
     provider = make_provider(cfg.provider, cfg.model)
 
     try:
-        registry = default_registry(cfg.tools, provider=provider)
+        registry = default_registry(cfg.tools, provider=provider, permissions=cfg.permissions)
     except ValueError as e:
         out(C.red(f"[tools] {e}"))
         return 2
@@ -280,6 +271,11 @@ async def amain(args: argparse.Namespace) -> int:
         out(C.red(f"[workflow] {e}"))
         return 2
 
+    # Per-agent bindings from every discovered workflow's `agents` map, so a
+    # workflow step pinned to a named agent runs on that agent's in-process
+    # model under the native runtime (see Agent._resolve_segment_provider).
+    agents_config = await collect_agents_config()
+
     async with Agent(
         provider=provider,
         tools=registry,
@@ -287,76 +283,75 @@ async def amain(args: argparse.Namespace) -> int:
         max_tokens=cfg.max_tokens,
         max_steps=cfg.max_steps,
         mode=cfg.mode,
+        agents_config=agents_config,
     ) as agent:
 
         if interactive:
-            tools = agent.tools.all()
-            out(C.dim(f"provider: {cfg.provider}"
-                      f"  |  model: {provider.model}"
-                      f"  |  streaming: {state.stream}"
-                      f"  |  tools: {len(tools)}"))
-            out(C.dim("type /help for commands, Ctrl-D to exit\n"))
+            from botcircuits.cli.banner import print_banner
+            print_banner(agent, provider, cfg)
 
-        while True:
-            msg = await read_user_message(interactive)
-            if msg is None:
-                if interactive:
-                    out()  # newline after Ctrl-D
-                return 0
-            if not msg.strip():
-                if interactive:
+        async with TUISession(interactive=interactive) as tui:
+            set_tui_session(tui)
+
+            while True:
+                msg = await tui.read_message()
+                if msg is None:
+                    if interactive:
+                        out()
+                    return 0
+                if not msg.strip():
                     continue
-                # piped blank line → skip it and keep reading (a multi-turn
-                # script may separate turns with blank lines). EOF (msg is None,
-                # handled above) is what ends a piped run.
-                continue
 
-            if msg.startswith("/"):
-                if interactive:
+                # A background task may have queued a pause while the user was
+                # typing. Drain the queue now so dispatch_reply sees it.
+                await tui._maybe_activate_next_pause()
+
+                # Route reply to a paused background task (workflow, permission, etc.)
+                if await tui.dispatch_reply(msg):
+                    # Give the resumed task a few event-loop ticks to run before
+                    # we read the next user message.
+                    for _ in range(5):
+                        await asyncio.sleep(0)
+                    continue
+
+                if msg.startswith("/"):
+                    if interactive:
+                        try:
+                            _handled, follow_up = await handle_slash(msg, agent, state)
+                        except SystemExit:
+                            return 0
+                        if follow_up:
+                            msg = follow_up
+                        else:
+                            continue
+
+                # Run the LLM call as a background task so the input prompt
+                # stays live during streaming / tool calls.
+                async def _chat(msg: str = msg) -> None:
+                    import time as _time
+                    _t0 = _time.monotonic()
                     try:
-                        _handled, follow_up = await handle_slash(msg, agent, state)
-                    except SystemExit:
-                        return 0
-                    # Lazy-tool triggers (e.g. /workflow) return a follow-up
-                    # prompt that should be dispatched as a normal chat
-                    # message — the freshly registered tool will be on the
-                    # registry by the time the provider call happens.
-                    if follow_up:
-                        msg = follow_up
-                    else:
-                        continue
-                # In piped mode, slash commands aren't meaningful; treat as text.
+                        if state.stream:
+                            await run_streaming(agent, msg, state)
+                        else:
+                            await run_blocking(agent, msg, state)
+                    except KeyboardInterrupt:
+                        out()
+                        out(C.yellow("(interrupted)"))
+                        return
+                    except Exception as e:
+                        out()
+                        out(C.red(f"[error] {type(e).__name__}: {e}"))
+                        return
+                    elapsed = _time.monotonic() - _t0
+                    total_tok = provider.usage_input_tokens + provider.usage_output_tokens
+                    tok_str = f"{total_tok / 1000:.1f}K" if total_tok >= 1000 else str(total_tok)
+                    out(C.dim(
+                        f"  {provider.model[:20]}  |  {tok_str}M tokens  "
+                        f"|  {elapsed:.0f}s  |  ⊙ {elapsed:.0f}s"
+                    ))
 
-            try:
-                if state.stream:
-                    await run_streaming(agent, msg, state)
-                else:
-                    await run_blocking(agent, msg, state)
-            except KeyboardInterrupt:
-                out()
-                out(C.yellow("(interrupted)"))
-                # session keeps going
-
-            # Session-cumulative REAL token usage, one machine-parseable line
-            # per turn (the last one wins for whole-run totals). Counted at the
-            # provider level so Layer-B normalization / workflow-indexer calls
-            # are included. Color auto-disables when piped, so downstream
-            # harnesses can parse the plain text. input_tokens is the TOTAL
-            # prompt size; the cache counters break out the portion served
-            # from / written to the prompt cache (billed at vendor discounts).
-            out(C.dim(
-                f"[usage] llm_calls={provider.usage_llm_calls} "
-                f"input_tokens={provider.usage_input_tokens} "
-                f"output_tokens={provider.usage_output_tokens} "
-                f"cache_read_tokens={provider.usage_cache_read_tokens} "
-                f"cache_write_tokens={provider.usage_cache_write_tokens}"
-            ))
-
-            # Piped mode used to stop after one message. Instead, keep reading:
-            # each subsequent stdin line is the next turn of a scripted
-            # multi-turn run, sharing this process's in-memory session (so the
-            # workflow / conversation state carries across turns). The loop ends
-            # at EOF (read_user_message returns None, handled at the top).
+                tui.submit(_chat())
 
 
 def main() -> None:

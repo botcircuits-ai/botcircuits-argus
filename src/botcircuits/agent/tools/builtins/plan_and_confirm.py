@@ -24,10 +24,11 @@ from botcircuits.agent.tools.builtins.todo_write import STATUSES, _STORE, _rende
 def plan_and_confirm_tool(*, auto: bool = False) -> LocalTool:
     effective_auto = _confirm.effective_auto(auto)
 
-    async def _handler(args: dict) -> dict:
+    async def _handler(args: dict, context: dict | None = None) -> dict:
         plan = args.get("plan")
         todos = args.get("todos", [])
         summary = args.get("summary", "")
+        workflow_bg = (context or {}).get("_workflow_bg")
 
         if not isinstance(plan, str) or not plan.strip():
             return {"error": "`plan` must be a non-empty string"}
@@ -71,6 +72,7 @@ def plan_and_confirm_tool(*, auto: bool = False) -> LocalTool:
         approved = await _confirm.confirm(
             "plan_and_confirm proposes:", lines,
             prompt="proceed? [y/N]: ",
+            workflow_bg=workflow_bg,
         )
         if approved:
             _render(cleaned)

@@ -31,11 +31,14 @@ from botcircuits.cli.ansi import C, out
 from botcircuits.cli.commands_skills import _AGENT_TARGETS, _cmd_install
 from botcircuits.cli.settings import SETTINGS_DIR, SHARED_FILE
 from botcircuits.cli.config import _read_raw
-from botcircuits.runtime.detect import CLAUDE_CODE, CODEX, HERMES, OPENCLAW
+from botcircuits.runtime.detect import NATIVE, CLAUDE_CODE, CODEX, HERMES, OPENCLAW
 
-#: Host agent runtimes selectable via `--runtime`. Excludes `native`/`self`,
-#: which aren't host-agent CLIs a project would pin itself to.
-RUNTIME_CHOICES = (CLAUDE_CODE, HERMES)
+#: Host agent runtimes selectable via `--runtime`. `native` pins the
+#: in-process agent — its workflow tools (`build_workflow` and each
+#: built workflow) are already registered as DEFAULT tools by the
+#: `botcircuits-cli`, so no skill install is needed for it. Excludes `self`,
+#: which isn't a host-agent CLI a project would pin itself to.
+RUNTIME_CHOICES = (NATIVE, CLAUDE_CODE, HERMES)
 
 #: Which `commands_skills` agent target each runtime installs skills into.
 #: Runtimes absent here (codex, openclaw) have no skills directory yet.
@@ -116,6 +119,14 @@ def run_init_command(args: argparse.Namespace) -> int:
     out(C.green(f"✓ Created {settings_path}"))
     if runtime:
         out(C.dim(f"  runtime: {runtime}"))
+
+    if runtime == NATIVE:
+        out(C.dim(
+            "  (runtime 'native' runs in-process — build_workflow and "
+            "built workflows are already default tools; no skill install "
+            "needed)"
+        ))
+        return 0
 
     agent = _RUNTIME_TO_SKILLS_AGENT.get(runtime)
     if agent is None:

@@ -13,8 +13,6 @@ transcript snapshot. Covered here:
     pause isn't branching / the workflow ends.
   - `compose_workflow_step_directive` asks for the re-call (with the
     variable list) only when a branch is pending.
-  - The agent loop's `[Active workflow]` reminder flips from "do NOT
-    call" to "call '<name>' passing …" when branch variables exist.
 """
 
 from __future__ import annotations
@@ -23,8 +21,7 @@ import asyncio
 import json
 
 import botcircuits.agent.workflow.local as wf_local
-from botcircuits.agent.core import _with_workflow_reminder
-from botcircuits.agent.tools import LocalTool, ToolRegistry
+from botcircuits.agent.tools import ToolRegistry
 from botcircuits.agent.workflow import (
     workflow_branch_variables,
     workflow_tool,
@@ -257,41 +254,3 @@ def test_render_branch_variable_lines_skips_malformed():
         _var("b"),
     ])
     assert lines == "- a (number): the a\n- b (string)"
-
-
-# --- agent-loop reminder ------------------------------------------------------
-
-def _registry_with_state(state: dict) -> ToolRegistry:
-    reg = ToolRegistry()
-    tool = LocalTool(
-        name="wf_branch", description="t",
-        input_schema={"type": "object", "properties": {}},
-        handler=lambda args: "",
-    )
-    tool._workflow_state = state
-    reg.register(tool)
-    return reg
-
-
-def test_reminder_resume_when_workflow_paused():
-    # Engine-driven mode: a workflow with a live session_id is paused
-    # waiting on the user. The reminder asks the model to re-call the tool
-    # to resume — the engine owns advancement, so there is no per-step
-    # "act then re-call with branch args" dance anymore.
-    reg = _registry_with_state(
-        {"session_id": "sid", "branch_variables": []}
-    )
-    system = _with_workflow_reminder("base", reg)
-    assert "paused waiting for the user's reply" in system
-    assert "call 'wf_branch' again to resume" in system
-
-
-def test_reminder_trigger_when_no_workflow_active():
-    # No active workflow but a workflow tool is registered: the reminder
-    # tells the model the tool MUST be its first action on a match.
-    reg = _registry_with_state(
-        {"session_id": None, "branch_variables": []}
-    )
-    system = _with_workflow_reminder("base", reg)
-    assert "[Available workflows]" in system
-    assert "MANDATORY" in system

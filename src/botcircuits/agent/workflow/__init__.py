@@ -357,10 +357,21 @@ def workflow_tool(
         text = directive.as_plain_text(action)
         return f"{notes_block}\n\n{text}" if notes_block else text
 
+    # Seed the FIRST call's schema from the workflow's declared top-level
+    # `flow.variables` (not just branch variables revealed after a pause).
+    # Without this, a model literally cannot pass `topic`/`research_depth`-
+    # style inputs on the initial call — the schema would have no
+    # properties — forcing every run through a human_feedback pause even
+    # when the caller already has the values. Passing extra (output-only)
+    # variables as args is harmless: they just merge into slots the
+    # workflow overwrites anyway.
+    declared_variables = record.get("flow", {}).get("variables") or []
+    initial_schema = _branch_input_schema(declared_variables)
+
     tool = LocalTool(
         name=wf_name,
         description=wf_desc,
-        input_schema=dict(_EMPTY_SCHEMA),
+        input_schema=initial_schema,
         handler=_handler,
     )
     # Expose the session state so the agent loop can detect that this
@@ -420,12 +431,32 @@ def active_workflow_names(reg: ToolRegistry) -> list[str]:
     return active
 
 
+async def collect_agents_config() -> dict[str, dict]:
+    """Merge every discovered workflow's top-level `agents` map into one
+    `{agent_name: {provider?, model?, runtime?}}` dict.
+
+    Used by the CLI to seed a native `Agent`'s `agents_config` before the
+    Agent is built, so a workflow step pinned to a named agent can resolve
+    that agent's in-process model (see `Agent._resolve_segment_provider`).
+    Later workflows win on a name clash.
+    """
+    merged: dict[str, dict] = {}
+    for record in await fetch_workflows():
+        agents_map = record.get("agents")
+        if isinstance(agents_map, dict):
+            for a_name, a_cfg in agents_map.items():
+                if isinstance(a_cfg, dict):
+                    merged[a_name] = a_cfg
+    return merged
+
+
 async def register_workflows(
     reg: ToolRegistry,
     *,
     provider: LLMProvider | None = None,
     normalize_enabled: bool = True,
     runtime=None,
+    agent=None,
 ) -> tuple[list[str], list[str]]:
     """Discover workflows on disk and register each as a LocalTool on `reg`.
 
@@ -438,6 +469,13 @@ async def register_workflows(
     re-entry. Set `normalize_enabled=False` to register the tools but
     skip B even when a provider is available.
 
+    Pass `agent` (the live `Agent`) to thread each workflow's top-level
+    `agents` map into the agent's `_agents_config`, so the in-process
+    (native) runtime can honor a step's per-agent `model` binding (see
+    `Agent._resolve_segment_provider`). Maps from all discovered workflows
+    are merged; later workflows win on a name clash. Harmless for the CLI
+    runtimes, which resolve per-agent models through their own path.
+
     Returns `(registered, skipped)` — both lists of workflow names.
     Names already bound to a non-workflow tool (a builtin or MCP tool)
     are reported as `skipped`. Names already bound to an EARLIER
@@ -449,7 +487,13 @@ async def register_workflows(
     records = await fetch_workflows()
     registered: list[str] = []
     skipped: list[str] = []
+    merged_agents: dict[str, dict] = {}
     for record in records:
+        agents_map = record.get("agents")
+        if isinstance(agents_map, dict):
+            for a_name, a_cfg in agents_map.items():
+                if isinstance(a_cfg, dict):
+                    merged_agents[a_name] = a_cfg
         tool = workflow_tool(
             record,
             provider=provider,
@@ -472,6 +516,18 @@ async def register_workflows(
                 continue
         reg.register(tool)
         registered.append(tool.name)
+
+    # Thread the discovered per-agent bindings onto the live Agent so the
+    # native runner can resolve a step's `agent` to an in-process
+    # provider/model. Merge (don't replace) so a re-run after editing one
+    # workflow keeps bindings from the others.
+    if agent is not None and merged_agents:
+        existing = getattr(agent, "_agents_config", None)
+        if isinstance(existing, dict):
+            existing.update(merged_agents)
+        else:
+            agent._agents_config = dict(merged_agents)
+
     return registered, skipped
 
 
@@ -483,5 +539,6 @@ __all__ = [
     "active_workflow_names",
     "workflow_branch_variables",
     "register_workflows",
+    "collect_agents_config",
     "_make_resolve_unfilled",
 ]

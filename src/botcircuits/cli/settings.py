@@ -156,6 +156,21 @@ def _merge_tools(base: dict, overlay: dict) -> dict:
     return merged
 
 
+def _merge_permissions(base: dict, overlay: dict) -> dict:
+    """Concatenate allow/ask/deny rule lists across layers instead of
+    replacing them — so a user-level deny rule still applies even when a
+    project layer also sets `permissions`, matching the additive way
+    Claude Code layers permission rules across settings scopes."""
+    merged: dict[str, Any] = {
+        "allow": list(base.get("allow", [])),
+        "ask": list(base.get("ask", [])),
+        "deny": list(base.get("deny", [])),
+    }
+    for key in ("allow", "ask", "deny"):
+        merged[key].extend(overlay.get(key, []))
+    return merged
+
+
 def merge_layers(layers: list[dict[str, Any]]) -> dict[str, Any]:
     """Reduce a list of already-validated settings layer dicts (lowest
     precedence first) into a single dict ready for `cli.config.resolve`.
@@ -168,6 +183,8 @@ def merge_layers(layers: list[dict[str, Any]]) -> dict[str, Any]:
         for key, value in layer.items():
             if key == "tools":
                 out[key] = _merge_tools(out.get(key, {}), value)
+            elif key == "permissions":
+                out[key] = _merge_permissions(out.get(key, {}), value)
             else:
                 out[key] = value
     return out

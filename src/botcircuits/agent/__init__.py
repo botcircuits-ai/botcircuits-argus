@@ -11,6 +11,7 @@ from botcircuits.agent.skill import LocalSkill, SkillSpec, discover_skills, pars
 from botcircuits.agent.store import ConversationStore
 from botcircuits.agent.tools import LocalTool, ToolRegistry, default_registry
 from botcircuits.agent.workflow import (
+    collect_agents_config,
     fetch_workflows,
     register_workflows,
     run_workflow,
@@ -25,6 +26,7 @@ __all__ = [
     "MCPServer",
     "SkillSpec",
     "ToolRegistry",
+    "collect_agents_config",
     "default_registry",
     "discover_skills",
     "fetch_workflows",

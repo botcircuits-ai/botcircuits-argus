@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING
 
 from botcircuits.cli.ansi import C, out
@@ -16,58 +17,103 @@ def preview(s: str, n: int = 200) -> str:
     return s if len(s) <= n else s[:n] + "…"
 
 
+# Emoji icons for known tool name prefixes (mirrors Hermes style)
+_TOOL_ICONS: dict[str, str] = {
+    "shell": "⚙",
+    "grep": "🔍",
+    "read": "📄",
+    "write": "✏️",
+    "edit": "✏️",
+    "search": "🔍",
+    "web": "🌐",
+    "http": "🌐",
+    "fetch": "🌐",
+    "skill": "🧩",
+    "workflow": "🔄",
+    "build": "🔨",
+    "plan": "📋",
+    "memory": "🧠",
+    "proc": "⚙",
+}
+
+
+def _tool_icon(name: str) -> str:
+    prefix = name.split("_")[0].lower()
+    return _TOOL_ICONS.get(prefix, "●")
+
+
 async def run_streaming(agent: "Agent", msg: str, state: "CLIState") -> None:
-    out(C.bold(C.cyan("assistant> ")), end="")
     saw_text = False
     sid = state.session_id
     last_was_text = False
+    prefix_needed = True
+    status_line = False
+    # Track per-tool-call start time for elapsed display
+    _tool_start: dict[str, float] = {}
 
     async for ev in agent.chat_stream(msg, session_id=sid, system=state.system):
         if ev.session_id and not state.session_id:
-            state.session_id = ev.session_id  # capture new session id
+            state.session_id = ev.session_id
 
         if ev.type == "text_delta":
+            if prefix_needed:
+                if status_line:
+                    out()
+                    status_line = False
+                out(C.bold(C.cyan("argus> ")), end="")
+                prefix_needed = False
             out(ev.text, end="", flush=True)
             saw_text = True
             last_was_text = True
 
         elif ev.type == "tool_call":
             if last_was_text:
-                out()  # break the line we were streaming on
+                out()
                 last_was_text = False
+            if status_line:
+                out()
+                status_line = False
             tc = ev.tool_call
-            args_preview = preview(str(tc.arguments), 120)
-            out(C.magenta(f"  ▸ tool_call  {tc.name}({args_preview})"))
+            icon = _tool_icon(tc.name)
+            args_preview = preview(str(tc.arguments), 80)
+            _tool_start[tc.name] = time.monotonic()
+            out(C.dim(f"  | {icon} {tc.name:<12}  {args_preview}"))
+            prefix_needed = True
 
         elif ev.type == "tool_result":
-            color = C.red if ev.is_error else C.green
+            col = C.red if ev.is_error else C.green
             label = "error" if ev.is_error else "result"
             shown = ev.text if state.show_tool_results else preview(ev.text or "", 200)
-            out(color(f"  ◂ {label}      ") + (shown or "(empty)"))
-            # Next round of assistant text starts fresh; reprint prefix.
-            out(C.bold(C.cyan("assistant> ")), end="")
+            out(col(f"  ◂ {label}      ") + (shown or "(empty)"))
+            out(C.dim("  ⋯ processing..."))
+            status_line = True
+            prefix_needed = True
             last_was_text = False
 
         elif ev.type == "turn_end":
-            # Internal marker; useful only for debugging. Ignore in normal output.
             pass
 
         elif ev.type == "done":
+            if status_line:
+                out()
+                status_line = False
+            if prefix_needed and (saw_text or ev.text):
+                out(C.bold(C.cyan("argus> ")), end="")
             if not saw_text and ev.text:
-                # Some providers/turns won't have streamed any text deltas
-                # (rare, but possible). Print the final text we got.
                 out(ev.text, end="")
-            out()  # newline at the end of the turn
+            out()
             return
 
         elif ev.type == "error":
-            out()
-            out(C.red(f"[error] {ev.text}"))
+            if status_line:
+                out()
+            out(C.red(f"argus> [error] {ev.text}"))
             return
 
 
 async def run_blocking(agent: "Agent", msg: str, state: "CLIState") -> None:
+    out(C.dim("  ⋯ thinking..."))
     reply, sid = await agent.chat(msg, session_id=state.session_id,
                                   system=state.system)
     state.session_id = sid
-    out(C.bold(C.cyan("assistant> ")) + reply)
+    out(C.bold(C.cyan("argus> ")) + reply)

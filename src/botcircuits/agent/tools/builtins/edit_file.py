@@ -24,11 +24,12 @@ DIFF_PREVIEW_LINES = 60
 def edit_file_tool(*, auto: bool = False) -> LocalTool:
     effective_auto = _confirm.effective_auto(auto)
 
-    async def _handler(args: dict) -> dict:
+    async def _handler(args: dict, context: dict | None = None) -> dict:
         path = args.get("path")
         old_string = args.get("old_string")
         new_string = args.get("new_string")
         replace_all = bool(args.get("replace_all", False))
+        preapproved = bool((context or {}).get("permission_preapproved"))
 
         if not isinstance(path, str) or not path:
             return {"error": "`path` must be a non-empty string"}
@@ -75,7 +76,9 @@ def edit_file_tool(*, auto: bool = False) -> LocalTool:
             "diff:",
             *[f"  {ln}" for ln in diff.splitlines()],
         ]
-        if effective_auto:
+        if preapproved:
+            pass
+        elif effective_auto:
             _confirm.warn("edit_file editing:", lines)
         else:
             allowed = await _confirm.confirm("edit_file proposes:", lines,

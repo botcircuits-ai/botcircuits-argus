@@ -45,9 +45,11 @@ ENGINE_SYSTEM_PROMPT = (
     "Rules:\n"
     "  - Perform each action in the segment, in order, using your tools, "
     "skills, and MCP servers exactly as you would normally.\n"
-    "  - If an action needs information only the user can provide, call "
-    "the 'human_feedback' tool with the question. The workflow pauses "
-    "until the user replies.\n"
+    "  - If an action needs information only the user can provide AND that "
+    "value was not already given (in the user's messages or the workflow's "
+    "input arguments), call the 'human_feedback' tool with the question. "
+    "The workflow pauses until the user replies. Never call 'human_feedback' "
+    "to re-ask for a value you already have.\n"
     "  - When the segment lists branch variables, call the 'record_slots' "
     "tool ONCE after completing the actions, passing the values you "
     "actually observed. These decide the engine's next step. Omit any you "
@@ -202,10 +204,23 @@ def build_segment_user_message(
     system_notes: list[str],
     item_variables: list[dict] | None = None,
     data_variables: list[dict] | None = None,
+    slots: dict | None = None,
 ) -> str:
     """The per-segment variable payload that rides AFTER the cached system
     prefix. Terse by design — the engine holds all the state."""
     parts: list[str] = []
+    # Expose filled slot values so the model knows what's already available
+    # and doesn't call human_feedback to re-ask for values it already has.
+    visible_slots = {
+        k: v for k, v in (slots or {}).items()
+        if not k.startswith("__") and v not in (None, "")
+    }
+    if visible_slots:
+        parts.append(
+            "Current workflow variables (already collected — do NOT ask "
+            "the user for these again):\n"
+            + json.dumps(visible_slots, ensure_ascii=False)
+        )
     if system_notes:
         parts.append("Engine notes:\n" + "\n".join(f"- {n}" for n in system_notes))
     if actions:

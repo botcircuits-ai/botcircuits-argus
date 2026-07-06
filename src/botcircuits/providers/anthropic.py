@@ -45,11 +45,10 @@ class AnthropicProvider(LLMProvider):
         ordered along Anthropic's cache hierarchy (tools → system → messages):
 
           1. the last LOCAL tool — the tool catalog is the largest fully
-             static chunk and survives even when the system prompt changes
-             (e.g. the per-turn `[Active workflow]` reminder);
+             static chunk and survives even when the system prompt changes;
           2. the system prompt (sent as a block list so the breakpoint can
-             ride on it) — static for plain chat, hits whenever the
-             workflow reminder is unchanged between calls;
+             ride on it) — static for plain chat, hits whenever it is
+             unchanged between calls;
           3. the last content block of the last message — a MOVING
              breakpoint: conversation history is append-only, so each call
              re-reads the previous prefix at the cached rate and extends

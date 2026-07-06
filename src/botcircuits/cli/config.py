@@ -75,6 +75,16 @@ class CLIConfig:
     # `normalize: false` to keep deterministic type coercion only.
     workflow: dict[str, Any] = field(default_factory=lambda: {"normalize": True})
 
+    # Fine-grained tool permission rules, modeled on Claude Code's
+    # permissions.allow/ask/deny (see agent/permissions.py). Each list
+    # holds rule strings like "Read", "Bash(npm run *)", "Edit(./src/**)".
+    # Evaluated deny -> ask -> allow, first match wins. A tool call that
+    # matches no rule falls back to that tool's own gate (e.g. shell_exec's
+    # y/N prompt) unchanged.
+    permissions: dict[str, Any] = field(
+        default_factory=lambda: {"allow": [], "ask": [], "deny": []}
+    )
+
 
 # Default `provider` honors the existing env var so behavior matches the
 # pre-config-file CLI when neither --config nor --provider is passed.
@@ -112,6 +122,31 @@ def _parse_workflow(raw: Any) -> dict[str, Any]:
         if not isinstance(raw["normalize"], bool):
             raise ConfigError("`workflow.normalize` must be a boolean")
         out["normalize"] = raw["normalize"]
+    return out
+
+
+def _parse_permissions(raw: Any) -> dict[str, Any]:
+    """Validate the `permissions` config block. Each of allow/ask/deny
+    (all optional) must be a list of rule strings; parsing them into
+    `PermissionRule` happens later in `agent.permissions`, so a malformed
+    rule surfaces there rather than here — this just checks shape."""
+    if not isinstance(raw, dict):
+        raise ConfigError("`permissions` must be a JSON object")
+    allowed = {"allow", "ask", "deny"}
+    unknown = set(raw) - allowed
+    if unknown:
+        raise ConfigError(
+            f"`permissions` has unknown keys: {sorted(unknown)}. "
+            f"Allowed: {sorted(allowed)}"
+        )
+    out: dict[str, Any] = {"allow": [], "ask": [], "deny": []}
+    for key in allowed:
+        if key not in raw:
+            continue
+        value = raw[key]
+        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+            raise ConfigError(f"`permissions.{key}` must be a list of strings")
+        out[key] = value
     return out
 
 
@@ -256,6 +291,8 @@ def load_config_file(path: str) -> dict[str, Any]:
             )
     if "tools" in data:
         data["tools"] = _parse_tools(data["tools"])
+    if "permissions" in data:
+        data["permissions"] = _parse_permissions(data["permissions"])
     if "workflow" in data:
         # Merge user overrides over the {"normalize": True} default so a
         # partial block doesn't wipe defaults for keys the user omitted.
