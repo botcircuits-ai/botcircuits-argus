@@ -128,6 +128,13 @@ async def handle_slash(
             out(C.dim(f"(session set to {state.session_id})"))
         else:
             out(C.dim(f"session_id = {state.session_id or '(none yet)'}"))
+            # Saved sessions (durable store) — resumable via /session <id>.
+            from botcircuits.agent import list_saved_sessions
+            saved = list_saved_sessions()
+            if saved:
+                out(C.dim("saved sessions (most recent first):"))
+                for s in saved[:10]:
+                    out(C.dim(f"  {s['name']}  ({s['messages']} messages)"))
         return True, None
 
     if head == "/system":

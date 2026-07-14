@@ -44,7 +44,8 @@ import sys
 from typing import Optional
 
 from botcircuits.agent import (
-    Agent, default_registry, register_workflows, collect_agents_config,
+    Agent, DurableConversationStore, default_registry, register_workflows,
+    collect_agents_config,
 )
 from botcircuits.agent.workflow import LocalWorkflowError
 from botcircuits.providers import AnthropicProvider, GeminiProvider, OpenAIProvider, OpenRouterProvider
@@ -94,7 +95,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Override the provider's default model")
     p.add_argument("--system", default=None, help="System prompt")
     p.add_argument("--session", default=None,
-                   help="Resume an existing session id (only useful inside one CLI run)")
+                   help="Resume a session id (persisted under .botcircuits/sessions, "
+                        "so it survives across CLI runs)")
 
     # Three-way streaming flag: --stream / --no-stream / unset.
     stream_group = p.add_mutually_exclusive_group()
@@ -284,6 +286,10 @@ async def amain(args: argparse.Namespace) -> int:
         max_steps=cfg.max_steps,
         mode=cfg.mode,
         agents_config=agents_config,
+        # Durable sessions: persisted as JSON-L under .botcircuits/sessions
+        # after every turn, so `--session <id>` / `/session <id>` resumes
+        # across CLI runs and `search_memory` can recall past conversations.
+        store=DurableConversationStore(),
     ) as agent:
 
         if interactive:

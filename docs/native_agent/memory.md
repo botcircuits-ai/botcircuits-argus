@@ -24,3 +24,7 @@ The `memory` builtin tool exposes three actions against targets `memory`
 
 The caps are enforced on write; the model is expected to curate (replace /
 remove) rather than accumulate.
+
+This is the *curated* memory. Raw conversation history is a separate system:
+durable JSON-L sessions plus the `search_memory` recall tool — see
+[sessions.md](sessions.md).

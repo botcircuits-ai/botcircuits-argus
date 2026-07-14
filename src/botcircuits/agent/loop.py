@@ -18,6 +18,7 @@ Use as an async context manager:
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator, Literal
 from uuid import uuid4
@@ -174,6 +175,17 @@ class Agent(SegmentRunner):
         await _bg.terminate_all()
         await self._local_mcp.stop()
         await self.provider.aclose()
+
+    @asynccontextmanager
+    async def _turn(self, convo):
+        """One serialized turn on `convo`: hold the session lock, and persist
+        the session however the turn ends (terminal reply, human_feedback
+        pause, step cap, or an exception) — a no-op on the in-memory store."""
+        async with convo.lock:
+            try:
+                yield
+            finally:
+                self.store.persist(convo.session_id)
 
     # -- mode strategy (native tool-use vs ReAct) ----------------------------
 
@@ -343,7 +355,7 @@ class Agent(SegmentRunner):
             await self.start()
 
         convo = self.store.get_or_create(session_id, system=system)
-        async with convo.lock:
+        async with self._turn(convo):
             convo.messages.append(Message(
                 role="user",
                 blocks=[{"type": "text", "text": user_input}],
@@ -439,7 +451,7 @@ class Agent(SegmentRunner):
         convo = self.store.get_or_create(session_id, system=system)
         sid = convo.session_id
 
-        async with convo.lock:
+        async with self._turn(convo):
             convo.messages.append(Message(
                 role="user",
                 blocks=[{"type": "text", "text": user_input}],

@@ -26,6 +26,7 @@ builds the standard set, threading per-tool overrides from the layered
 | `plan_and_confirm` | present a plan, gate on user approval |
 | `human_feedback` | ask the user a question (pauses the loop) |
 | `memory` | edit persistent memory files |
+| `search_memory` | keyword recall from past sessions (excludes the current one) |
 | `web_search` / `web_extract` | web lookup and page extraction |
 | `build_workflow` | author a workflow (lazy-registered via `/workflow`) |
 | `add` / `now` | arithmetic / current time |

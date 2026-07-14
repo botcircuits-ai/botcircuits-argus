@@ -81,7 +81,7 @@ permission-gated registry.
 | `context.py` | Bounded context snapshot handed to tools | [context.md](context.md) |
 | `events.py` | Loop internals → UI `StreamEvent`s; pause detection | [events.md](events.md) |
 | `segments.py` | Engine-driven workflow segment execution | [segments.md](segments.md) |
-| `sessions.py` | `ConversationStore` — per-session history + lock | [sessions.md](sessions.md) |
+| `sessions.py` | Conversation store: durable JSON-L sessions + episodic search | [sessions.md](sessions.md) |
 | `memory.py` | Persistent MEMORY.md / USER.md notes across sessions | [memory.md](memory.md) |
 | `tools/` | `ToolRegistry`, `LocalTool`, the builtin tool set | [tools.md](tools.md) |
 | `permissions.py` | allow / ask / deny rules gating tool calls | [permissions.md](permissions.md) |

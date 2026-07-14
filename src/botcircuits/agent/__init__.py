@@ -16,7 +16,12 @@ Public surface for ergonomic imports:
 from botcircuits.agent.loop import Agent
 from botcircuits.agent.mcp import MCPServer
 from botcircuits.agent.skill import LocalSkill, SkillSpec, discover_skills, parse_skill_md
-from botcircuits.agent.sessions import ConversationStore
+from botcircuits.agent.sessions import (
+    ConversationStore,
+    DurableConversationStore,
+    list_saved_sessions,
+    search_sessions,
+)
 from botcircuits.agent.tools import LocalTool, ToolRegistry, default_registry
 from botcircuits.agent.workflow import (
     collect_agents_config,
@@ -29,6 +34,7 @@ from botcircuits.agent.workflow import (
 __all__ = [
     "Agent",
     "ConversationStore",
+    "DurableConversationStore",
     "LocalSkill",
     "LocalTool",
     "MCPServer",
@@ -38,8 +44,10 @@ __all__ = [
     "default_registry",
     "discover_skills",
     "fetch_workflows",
+    "list_saved_sessions",
     "parse_skill_md",
     "register_workflows",
     "run_workflow",
+    "search_sessions",
     "workflow_tool",
 ]
