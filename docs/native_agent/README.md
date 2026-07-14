@@ -34,7 +34,10 @@ src/botcircuits/
                segment events       │  3 interpret the reply     │   (MODEL seam)
                → StreamEvents)      │  4 run tool calls          │
   context.py ─(bounded snapshot ──► │  5 feed results back, loop │
-               for every tool call) └─────────────┬──────────────┘
+               for every tool call) │  6 verification.py gate:   │
+                                    │    code changed? demand an │
+                                    │    observed passing test   │
+                                    └─────────────┬──────────────┘
                                                   │ step 4
                                                   ▼
   ┌───────────────────────────────────────────────┬───────────────────────┐
@@ -44,6 +47,9 @@ src/botcircuits/
   │   builtins           mcp.py           skill/           workflow/      │
   │   shell · files ·    MCP servers      SKILL.md dirs    one tool per   │
   │   web · memory · …   as LocalTools    as LocalTools    workflow       │
+  │                                                                       │
+  │   subagents.py: delegate / fan_out ──► fresh isolated Agent(s),       │
+  │   parallel, answer-only (no transcript back)                          │
   └──────────────────────────────────────────────┬────────────────────────┘
                                                  │ a workflow tool fires
                                                  ▼
@@ -69,6 +75,10 @@ Two control modes, one seam:
   `segments.py`. Control returns to the loop on *done* or a *question*
   pause; the user's next message auto-resumes the paused workflow (step 1).
 
+`orchestration.py` sits between the two: `/plan <task>` plans ad-hoc steps
+and drives them through a fresh worker agent with checkpoints — lighter
+than a workflow, more structured than one turn.
+
 Both modes call the model only through the `providers/` seam, and every tool
 call — builtin, MCP, skill, or workflow — goes through the same
 permission-gated registry.
@@ -81,6 +91,9 @@ permission-gated registry.
 | `context.py` | Bounded context snapshot handed to tools | [context.md](context.md) |
 | `events.py` | Loop internals → UI `StreamEvent`s; pause detection | [events.md](events.md) |
 | `segments.py` | Engine-driven workflow segment execution | [segments.md](segments.md) |
+| `orchestration.py` | Plan a task into steps, run them with checkpoints | [orchestration.md](orchestration.md) |
+| `subagents.py` | Isolated, parallel sub-loops (`delegate` / `fan_out`) | [subagents.md](subagents.md) |
+| `verification.py` | Enforced-run gate + scrubbed-process code oracle | [verification.md](verification.md) |
 | `sessions.py` | Conversation store: durable JSON-L sessions + episodic search | [sessions.md](sessions.md) |
 | `memory.py` | Persistent MEMORY.md / USER.md notes across sessions | [memory.md](memory.md) |
 | `tools/` | `ToolRegistry`, `LocalTool`, the builtin tool set | [tools.md](tools.md) |

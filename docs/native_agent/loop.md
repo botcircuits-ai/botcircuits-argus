@@ -19,6 +19,33 @@ filesystem skills into one registry (user tools win name collisions).
 
 ## One turn
 
+```
+ user message
+      │
+      ▼
+ append to history ──(workflow paused? resume it directly)
+      │
+      ▼
+ ┌─► provider.complete / stream          (system + history + tools)
+ │        │
+ │        ▼
+ │   interpret reply ── mode-agnostic: native tool_calls | ReAct parse
+ │        │
+ │        ├── tool calls ──► run all concurrently ──► results appended ──┐
+ │        │                  (human_feedback? pause: reply = question)   │
+ │        │                                                              │
+ │        └── terminal text                                              │
+ │                │                                                      │
+ │                ▼                                                      │
+ │        verification gate ── code changed, no observed test pass?      │
+ │                │      │                                               │
+ │           pass │      └── nudge "run the tests" ──────────────────────┤
+ │                ▼                                                      │
+ │          reply → user                                                 │
+ └───────────────────────────────────────────────────────────────────◄──┘
+                                             (≤ max_steps rounds, default 500)
+```
+
 1. Append the user message; if a workflow is paused, resume it directly
    (no model decision — the message *is* the answer).
 2. Call the provider with system + history + exposed tools.
@@ -27,6 +54,10 @@ filesystem skills into one registry (user tools win name collisions).
    append the results as a tool-result message, and go to 2.
 5. Stop early when `human_feedback` fired (pause: surface the question,
    the user's next message resumes) or after `max_steps` (default 500).
+6. Before accepting a terminal reply, the verification gate runs: if this
+   turn changed code and the project declares a test command, the loop
+   demands an observed passing run first (see
+   [verification.md](verification.md)).
 
 `chat_stream` is the same loop yielding `StreamEvent`s (`text_delta`,
 `tool_call`, `tool_result`, `turn_end`, `done`, `error`), including live

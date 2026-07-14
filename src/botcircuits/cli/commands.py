@@ -48,6 +48,7 @@ class CLIState:
 
 def print_help() -> None:
     out(C.dim("commands:"))
+    out(C.dim("  /plan <task>          plan a task into steps and run them with checkpoints"))
     out(C.dim("  /reset                drop current session"))
     out(C.dim("  /session [id]         show or switch session id"))
     out(C.dim("  /system <text>        set system prompt (effective on /reset)"))
@@ -120,6 +121,25 @@ async def handle_slash(
             agent.store.reset(state.session_id)
         state.session_id = None
         out(C.dim("(session reset)"))
+        return True, None
+
+    if head == "/plan":
+        if not rest:
+            out(C.dim("usage: /plan <task>"))
+            return True, None
+        # Orchestration: plan the task into steps, run them in order through
+        # a fresh worker agent (checkpoints + retry), print plan + results.
+        from botcircuits.agent import Orchestrator
+        orch = Orchestrator(provider=agent.provider, tools=agent.tools,
+                            max_tokens=agent.max_tokens)
+        result = await orch.run(rest.strip())
+        out(C.bold("plan:"))
+        for i, step in enumerate(result.plan, 1):
+            out(f"  {i}. {step}")
+        out(C.bold("results:"))
+        for i, (step, res) in enumerate(zip(result.plan, result.results), 1):
+            out(f"  {i}. {step}")
+            out(C.dim(f"     → {res}"))
         return True, None
 
     if head == "/session":

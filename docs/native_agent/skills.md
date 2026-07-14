@@ -2,6 +2,23 @@
 
 Two independent concepts under one roof.
 
+```
+ HOSTED (SkillSpec)                    FILESYSTEM (LocalSkill)
+
+ SkillSpec("xlsx") ─► provider call    skills/deploy/SKILL.md
+   Anthropic: named skill bundle          │ discover on Agent.start()
+   OpenAI/Gemini: enables hosted          ▼
+   code execution                      LocalTool "deploy" ─► registry
+                                          │ model (or user /deploy) invokes
+                                          ▼
+                                       render body — re-run !`cmd` blocks
+                                       (git diff, ls … always fresh)
+                                          │
+                                          ▼
+                                       returned as instructions the
+                                       model follows THIS turn
+```
+
 ## Hosted skills — `SkillSpec` (`skill/spec.py`)
 
 A request handed to the LLM provider. On Anthropic, `skill_id` selects a

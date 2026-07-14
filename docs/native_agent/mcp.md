@@ -1,5 +1,24 @@
 # MCP (`agent/mcp.py`)
 
+```
+ MCPServer(name, mode, transport)
+        │
+        ├── mode="hosted" ──► passed through on the provider call —
+        │                     the VENDOR runs the server (Anthropic/OpenAI)
+        │        │
+        │        └── provider lacks hosted MCP? auto-promoted to local ─┐
+        │                                                               │
+        └── mode="local" ◄──────────────────────────────────────────────┘
+                 │
+                 ▼
+        LocalMCPManager opens the session in-process
+              stdio │ http │ sse            (Agent.start / aclose)
+                 │
+                 ▼
+        each MCP tool ──► LocalTool ──► agent's registry
+                          (same permission gate as builtins)
+```
+
 `MCPServer` config + the local-mode session manager. Two modes:
 
 - `hosted` — the provider runs the MCP server-side (Anthropic / OpenAI).

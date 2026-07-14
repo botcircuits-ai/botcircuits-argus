@@ -1,5 +1,25 @@
 # Tools (`agent/tools/`)
 
+```
+ model emits tool_call(name, args)
+        │
+        ▼
+ ToolRegistry.run(name, args, context)
+        │
+        ├─ 1 permissions.evaluate(name, args)     deny → blocked
+        │                                         ask  → y/N prompt
+        │                                         allow → proceed
+        ▼
+ ┌─ 2 dispatch to the handler ────────────────────────────────┐
+ │   builtin        MCP tool       skill         workflow     │
+ │   (shell, fs,    (local MCP     (renders      (enters the  │
+ │    web, memory)   session)       SKILL.md)     engine)     │
+ └──────────────────────────┬─────────────────────────────────┘
+                            ▼
+ 3 (result_text, is_error) ──► tool_result block ──► back to the model
+   error dicts / non-zero exit_code are flagged is_error automatically
+```
+
 A tool is a `LocalTool`: name + description + JSON-schema parameters + a
 handler. Handlers are sync or async and return a string or any
 JSON-serializable value; errors come back as strings the model can read and
@@ -28,6 +48,7 @@ builds the standard set, threading per-tool overrides from the layered
 | `memory` | edit persistent memory files |
 | `search_memory` | keyword recall from past sessions (excludes the current one) |
 | `web_search` / `web_extract` | web lookup and page extraction |
+| `delegate` / `fan_out` | spawn isolated subagents (registered on `Agent.start()`, see [subagents.md](subagents.md)) |
 | `build_workflow` | author a workflow (lazy-registered via `/workflow`) |
 | `add` / `now` | arithmetic / current time |
 

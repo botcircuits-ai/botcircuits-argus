@@ -3,6 +3,25 @@
 Fine-grained tool permission rules, modeled on Claude Code's
 `permissions.allow` / `ask` / `deny`.
 
+```
+ evaluate(tool_name, args)
+      │
+      ▼
+ deny rules   ── match? ──► BLOCKED            (checked first — deny
+      │ no                                      always wins)
+      ▼
+ ask rules    ── match? ──► PROMPT (y/N)
+      │ no
+      ▼
+ allow rules  ── match? ──► RUN
+      │ no
+      ▼
+ read-only shell allowlist (pwd, ls, cat, …) ──► RUN without prompting
+      │ no
+      ▼
+ UNSPECIFIED ──► the tool's own gate decides (e.g. shell_exec's y/N)
+```
+
 A rule is `Tool` or `Tool(specifier)`:
 
 ```

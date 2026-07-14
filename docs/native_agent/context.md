@@ -2,6 +2,23 @@
 
 What surrounding conversation state a tool call gets to see.
 
+```
+ convo.messages (full history — can be huge)
+      │
+      │  extract + truncate (≤ 2000 chars each)
+      ▼
+ ┌───────────────────────────────┐
+ │ tool_context                  │
+ │   last_user_message      ─────┼── the human's utterance (tool
+ │   last_assistant_message ─────┼── results skipped)   most recent
+ │   session_id                  │   assistant prose
+ │   run_segment (engine seam)   │
+ └───────────────┬───────────────┘
+                 ▼
+        handler(args, context)   ── only if the handler's signature
+                                    accepts a second argument
+```
+
 The loop hands every tool call a small, bounded snapshot instead of the whole
 transcript:
 

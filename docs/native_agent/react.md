@@ -4,6 +4,27 @@ Text-mode tool use as an alternative to native function calling — the classic
 ReAct (Yao et al., 2022) pattern. Selected with `mode="react"` (config:
 `mode` in `settings.json`).
 
+```
+ system prompt + tool preamble        (render_react_preamble — the
+        │                              provider gets NO structured tools)
+        ▼
+ ┌─► model reply (plain text)
+ │        │
+ │        ▼
+ │   parse_react_step
+ │        │
+ │        ├── "Thought: … Action: X          one ToolCall ─► run tool
+ │        │    Action Input: {…}"                 │
+ │        │                                       ▼
+ │        │              "Observation: <result>" as plain text ──┐
+ │        │                                                      │
+ │        └── "Final Answer: …" (or unparseable) ── terminal     │
+ │                     │                                         │
+ │                     ▼                                         │
+ │                reply → user                                   │
+ └───────────────────────────────◄───────────────────────────────┘
+```
+
 Tools are described *in the system prompt* (`render_react_preamble`); the
 model emits a `Thought / Action / Action Input` block that
 `parse_react_step` extracts (one action per turn); the tool result is fed

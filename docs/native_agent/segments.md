@@ -7,6 +7,34 @@ Once a workflow starts, the *engine* owns the loop; the LLM is a subroutine
 invoked once per branch-delimited segment. `SegmentRunner` (mixed into
 `Agent`) implements that subroutine.
 
+```
+ workflow engine ──(actions, branch vars, slots)──► _run_segment
+                                                        │
+        ┌───────────────────────────────────────────────┘
+        ▼
+   ENGINE_SYSTEM_PROMPT (constant, cache-stable) + segment payload
+        │
+        ▼
+   ┌─► provider call                                    (≤ 25 rounds)
+   │        │
+   │        ├── real tool calls ──► agent's tools ──► results ──┐
+   │        │   (workflow tools excluded — the engine advances) │
+   │        │                                                   │
+   │        ├── record_slots / record_item_list ──► captured ───┤ terminal
+   │        │                                                   │
+   │        ├── human_feedback ──► paused=True, question ───────┤ terminal
+   │        │                                                   │
+   │        └── no tool calls ── terminal ──────────────────────┤
+   │                                                            │
+   └─────────────────────────────────◄──────────────────────────┘
+                                                        │
+                                                        ▼
+   SegmentResult(text, captured_slots, captured_items, paused?)
+        │
+        ▼
+ engine evaluates the branch DETERMINISTICALLY and advances itself
+```
+
 ## `_run_segment(...)`
 
 Runs ONE segment: a constant-size, cache-stable system prompt

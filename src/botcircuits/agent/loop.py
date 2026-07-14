@@ -41,7 +41,14 @@ from botcircuits.agent.skill import (
     discover_skills,
     skill_to_tool,
 )
+from botcircuits.agent.subagents import delegate_tool, fan_out_tool
 from botcircuits.agent.tools import ToolRegistry
+from botcircuits.agent.verification import (
+    changed_code,
+    observed_pass,
+    test_command,
+    verification_nudge,
+)
 from botcircuits.agent.workflow import active_workflow_names
 
 MAX_AGENT_STEPS = 500
@@ -66,6 +73,10 @@ class Agent(SegmentRunner):
         enable_workflows: bool = True,
         mode: Literal["native", "react"] = "native",
         agents_config: dict[str, dict] | None = None,
+        enable_subagents: bool = True,
+        verify_attempts: int = 3,
+        require_run: bool = True,
+        agents_dir: str | Path = ".",
     ):
         self.provider = provider
         self.user_tools = tools or ToolRegistry()
@@ -100,6 +111,19 @@ class Agent(SegmentRunner):
         # otherwise; the eval framework's "no workflow" baseline mode
         # is the one consumer that flips this off.
         self.enable_workflows = enable_workflows
+        # When True, `start()` registers the `delegate` / `fan_out` tools so
+        # the model can spawn isolated subagents. Workers spawned by the
+        # subagents/orchestration modules set this False — no recursion.
+        self.enable_subagents = enable_subagents
+        # Verification (enforced-run gate): when a turn changes code and the
+        # project declares a test command (AGENTS.md `## Testing` under
+        # `agents_dir`), refuse "done" until a real passing shell_exec run of
+        # that command is observed in this turn's transcript, feeding the
+        # demand back up to `verify_attempts` times. `require_run=False`
+        # opts out entirely.
+        self.verify_attempts = verify_attempts
+        self.require_run = require_run
+        self.agents_dir = Path(agents_dir)
 
         # Roots scanned for filesystem skills on start(). Callers can
         # pass an explicit list (or []) to override the default project
@@ -165,6 +189,14 @@ class Agent(SegmentRunner):
             if self.tools.has(sk.name):
                 continue
             self.tools.register(skill_to_tool(sk))
+        # Subagent spawning (delegate / fan_out), bound to this live agent so
+        # subagents see the final merged registry. Registered last, and never
+        # over a user tool of the same name.
+        if self.enable_subagents:
+            for factory in (delegate_tool, fan_out_tool):
+                tool = factory(self)
+                if not self.tools.has(tool.name):
+                    self.tools.register(tool)
         self._tools_built = True
 
     async def aclose(self) -> None:
@@ -345,6 +377,32 @@ class Agent(SegmentRunner):
         convo.messages.append(self._result_message([tc], [(out, err)]))
         return tc, out, err
 
+    # -- verification (enforced-run gate) -------------------------------------
+
+    def _verify_nudge(self, messages: list[Message], turn_start: int,
+                      state: dict) -> str | None:
+        """If this turn changed code and the project's declared test command
+        hasn't been OBSERVED passing in the transcript, return the demand to
+        feed back (the loop continues); else None (accept the reply).
+
+        The model runs the test itself with shell_exec; the harness only
+        watches the receipts — a narrated "it works" is never enough. Capped
+        at `verify_attempts`; exhausted attempts accept the last reply so the
+        turn still ends (the failure is visible in the transcript)."""
+        if not self.require_run:
+            return None
+        command = state.get("command")
+        if command is None:
+            command = state["command"] = test_command(self.agents_dir) or ""
+        if not command or not changed_code(messages, turn_start):
+            return None
+        if observed_pass(messages, turn_start, command):
+            return None
+        if state.get("attempts", 0) >= self.verify_attempts:
+            return None
+        state["attempts"] = state.get("attempts", 0) + 1
+        return verification_nudge(command)
+
     # -- non-streaming chat -------------------------------------------------
 
     async def chat(self, user_input: str, session_id: str | None = None,
@@ -356,6 +414,8 @@ class Agent(SegmentRunner):
 
         convo = self.store.get_or_create(session_id, system=system)
         async with self._turn(convo):
+            turn_start = len(convo.messages)
+            verify_state: dict = {}
             convo.messages.append(Message(
                 role="user",
                 blocks=[{"type": "text", "text": user_input}],
@@ -397,7 +457,17 @@ class Agent(SegmentRunner):
                                               blocks=assistant_blocks))
 
                 if terminal:
-                    return text, convo.session_id
+                    # Verification gate: a code-changing turn must show a
+                    # real passing test run before "done" is accepted.
+                    nudge = self._verify_nudge(convo.messages, turn_start,
+                                               verify_state)
+                    if nudge is None:
+                        return text, convo.session_id
+                    convo.messages.append(Message(
+                        role="user",
+                        blocks=[{"type": "text", "text": nudge}],
+                    ))
+                    continue
 
                 # Build tool-invocation context once per turn. The same
                 # snapshot is handed to every tool call in this round.
@@ -452,6 +522,8 @@ class Agent(SegmentRunner):
         sid = convo.session_id
 
         async with self._turn(convo):
+            turn_start = len(convo.messages)
+            verify_state: dict = {}
             convo.messages.append(Message(
                 role="user",
                 blocks=[{"type": "text", "text": user_input}],
@@ -539,6 +611,16 @@ class Agent(SegmentRunner):
                     yield StreamEvent(type="turn_end", session_id=sid)
 
                     if terminal:
+                        # Verification gate: a code-changing turn must show
+                        # a real passing test run before "done" is accepted.
+                        nudge = self._verify_nudge(convo.messages, turn_start,
+                                                   verify_state)
+                        if nudge is not None:
+                            convo.messages.append(Message(
+                                role="user",
+                                blocks=[{"type": "text", "text": nudge}],
+                            ))
+                            continue
                         final_text = text
                         hit_step_limit = False
                         break

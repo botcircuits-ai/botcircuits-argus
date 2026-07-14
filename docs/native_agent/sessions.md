@@ -8,6 +8,23 @@ The conversation store, plus durable state and episodic recall.
   `get_or_create`, `reset`, `list_sessions`. Sessions die with the process.
 - `DurableConversationStore` — the same store, persisted.
 
+```
+            every turn end                       process restart
+                 │                                     │
+                 ▼                                     ▼
+ Agent ──► store.persist(id)              get_or_create(id) not in memory?
+                 │                                     │
+                 ▼                                     ▼
+        atomic write (tmp+rename)              load_session(id)
+                 │                                     ▲
+                 ▼                                     │
+        .botcircuits/sessions/<id>.jsonl  ─────────────┘
+                 │
+                 │  keyword scan across ALL *.jsonl (minus current session)
+                 ▼
+        search_sessions(query) ◄── search_memory tool (model-invoked)
+```
+
 ## Durable state
 
 Conversation is not state: nothing survives a kill unless it's written.

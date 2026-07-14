@@ -3,6 +3,22 @@
 Persistent, bounded, curated notes that survive across sessions (modeled on
 Hermes Agent's memory feature).
 
+```
+ ~/.botcircuits/memories/
+   MEMORY.md ──┐                       session N            session N+1
+   USER.md  ──┤  read ONCE at         ┌──────────┐         ┌──────────┐
+              └─ session creation ──► │ frozen in │         │ fresh    │
+                                      │ system    │         │ snapshot │
+                                      │ prompt    │         └────▲─────┘
+                                      └────┬──────┘              │
+                                           │  memory tool        │
+                                           │  add / replace /    │
+                                           └─ remove ──► files ──┘
+                                              (edits land NEXT session —
+                                               the live prompt stays
+                                               cache-stable)
+```
+
 Two flat files under `~/.botcircuits/memories/`:
 
 | File | Content | Cap |

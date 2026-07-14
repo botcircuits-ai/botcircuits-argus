@@ -2,6 +2,24 @@
 
 Translating loop internals into UI-facing signals.
 
+```
+ workflow engine segment                       chat_stream consumer (UI)
+ (runs INSIDE a tool handler,
+  invisible to the main loop)
+
+   ("text", str)        ──┐
+   ("tool_call", tc)    ──┼─► segment_stream_events ─► StreamEvent
+   ("tool_result", ...) ──┘         (same shapes         text_delta
+                                     the loop yields)    tool_call
+                                                         tool_result
+
+ tool round results ──► human_feedback_pause ──► question │ None
+                        (did the model ask          │
+                         the user something?)       ▼
+                                              loop pauses; the reply
+                                              is the question
+```
+
 ## `segment_stream_events(kind, payload, sid)`
 
 An engine-driven workflow runs inside a tool handler, not in the main loop —

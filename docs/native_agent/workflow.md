@@ -3,6 +3,28 @@
 Workflows are BotCircuits' core primitive: a deterministic state machine
 drives multi-step work; the LLM is a subroutine, not the driver.
 
+```
+ .botcircuits/workflows/*.json ──► one LocalTool per workflow
+                                          │ model triggers it
+                                          ▼
+                            run_workflow_engine — THE ENGINE OWNS THE LOOP
+                                          │
+        ┌─────────────────────────────────┤ walk compiled segments
+        ▼                                 │
+   run_segment (LLM, once per segment)    │
+        │ captured slots / item facts     │
+        ▼                                 │
+   evaluate branch DETERMINISTICALLY ─────┘ advance to the next segment
+        │
+        ├── question step ──► EngineResult(paused, question)
+        │                          │ surfaced as the reply; the user's
+        │                          │ next message AUTO-RESUMES (no model
+        │                          ▼ decision needed)
+        │                     conversational loop
+        │
+        └── end ──► EngineResult(done, summary) ──► model relays it
+```
+
 ## Loading & exposure
 
 Workflows live on disk (`$BOTCIRCUITS_WORKFLOWS_DIR` or
