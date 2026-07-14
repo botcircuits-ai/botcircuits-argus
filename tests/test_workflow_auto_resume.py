@@ -16,7 +16,7 @@ import asyncio
 import json
 
 import botcircuits.agent.workflow.local as wf_local
-from botcircuits.agent.core import Agent
+from botcircuits.agent.loop import Agent
 from botcircuits.agent.tools import ToolRegistry
 from botcircuits.agent.tools.builtins.human_feedback import HUMAN_FEEDBACK_TOOL
 from botcircuits.agent.workflow import active_workflow_names, workflow_tool

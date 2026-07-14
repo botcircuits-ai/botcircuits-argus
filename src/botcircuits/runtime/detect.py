@@ -196,8 +196,8 @@ def select_runtime(
     named agent (from the workflow's `agents` map) routed to THIS runtime
     instance — see `MultiplexRuntime`, which builds one instance per distinct
     runtime type and passes it each type's slice of the map. Only the CLI
-    providers (claude-code/codex/openclaw) consume it here; `native_factory`
-    builds its own `NativeRuntime` with its own `agents_config` directly.
+    providers (claude-code/codex/openclaw) consume it here; a `native_factory`
+    caller wires its own `agents_config` into the provider it builds.
     """
     chosen = (name or detect_runtime_name(settings)).lower()
     config = runtime_config(chosen, settings)

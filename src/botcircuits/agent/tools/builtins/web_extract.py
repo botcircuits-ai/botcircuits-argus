@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import re
-import urllib.parse
 
 from botcircuits.agent.tools.registry import LocalTool, ToolRegistry
 

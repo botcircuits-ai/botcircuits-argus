@@ -2,7 +2,7 @@
 
 Once a workflow starts, the ENGINE owns the loop. The LLM is a
 subroutine the engine invokes per branch-delimited *segment* with a
-constant-size, cache-stable prompt (see `agent.core.Agent._run_segment`).
+constant-size, cache-stable prompt (see `agent.segments.SegmentRunner._run_segment`).
 The state machine — not the conversation history — is the memory.
 
 Contrast with `executor.run_flow` (the old LLM-driven path): there the

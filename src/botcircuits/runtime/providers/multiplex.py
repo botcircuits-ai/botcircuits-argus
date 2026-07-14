@@ -2,11 +2,10 @@
 
 A workflow's `agents` map can name agents backed by DIFFERENT host runtimes
 (one step on `claude-code`, another on `codex`) as well as different models
-within the SAME runtime. Each concrete `AgentRuntimeProvider` (claude-code,
-native, …) already resolves a *model* override per call via its own
-`agents_config` (see `ClaudeCodeRuntime`/`NativeRuntime`); this class is the
-one layer above that picks which RUNTIME INSTANCE handles a given segment in
-the first place.
+within the SAME runtime. Each concrete `AgentRuntimeProvider` already
+resolves a *model* override per call via its own `agents_config` (see
+`ClaudeCodeRuntime`); this class is the one layer above that picks which
+RUNTIME INSTANCE handles a given segment in the first place.
 
 Only one instance per distinct runtime TYPE referenced by a workflow's
 `agents` map is built (not one per agent) — agents that share a runtime type

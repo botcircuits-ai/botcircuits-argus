@@ -237,7 +237,7 @@ def compose_add_prompt(prompt: str, target: Optional[str] = None) -> str:
         )
     else:
         name_instruction = (
-            f"Call `build_workflow` once with a fresh `name` (slug-safe). "
+            "Call `build_workflow` once with a fresh `name` (slug-safe). "
         )
     return (
         f"Create a NEW workflow. User request: {prompt}\n\n"

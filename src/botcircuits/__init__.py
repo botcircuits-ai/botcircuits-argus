@@ -59,7 +59,7 @@ _load_env()
 
 # Public API re-exports. Keep this list tight — only what's meant to be
 # used externally. Internal modules should import from the submodule
-# directly (e.g. `from .agent.core import Agent`) to avoid circular
+# directly (e.g. `from .agent.loop import Agent`) to avoid circular
 # imports during package initialization.
 from botcircuits.agent import (
     Agent,

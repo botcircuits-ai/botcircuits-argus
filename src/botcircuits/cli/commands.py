@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import uuid
 from typing import TYPE_CHECKING, Any, Optional
 
 from botcircuits.agent.tools import register_builtin
@@ -15,7 +14,6 @@ from botcircuits.agent.workflow.cli_commands import (
     locate_workflow_for_edit,
     parse_workflow_command,
 )
-from botcircuits.types import Message
 from botcircuits.cli.ansi import C, out
 from botcircuits.cli.config import CLIConfig
 

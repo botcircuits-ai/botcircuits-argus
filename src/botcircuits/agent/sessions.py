@@ -1,4 +1,4 @@
-"""In-memory conversation store.
+"""Sessions — the in-memory conversation store.
 
 Each `Conversation` carries the message history, an optional system
 prompt, and an asyncio lock that serializes turns within one session.

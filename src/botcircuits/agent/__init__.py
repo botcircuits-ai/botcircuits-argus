@@ -1,14 +1,22 @@
-"""Agent loop subpackage.
+"""The native agent package — harness modules around one drive loop.
+
+Modeled on the Model + Harness + UI framing: the model seam lives in
+`botcircuits/providers`, the UI in `botcircuits/cli`, and everything in
+here is harness — the loop (`loop`), context extraction (`context`),
+event mapping (`events`), segment execution (`segments`), sessions
+(`sessions`), persistent memory (`memory`), tools + permissions
+(`tools`, `permissions`), skills (`skill`), MCP (`mcp`), the ReAct
+fallback (`react`), and the workflow engine (`workflow`).
 
 Public surface for ergonomic imports:
 
     from botcircuits.agent import Agent, default_registry
 """
 
-from botcircuits.agent.core import Agent
+from botcircuits.agent.loop import Agent
 from botcircuits.agent.mcp import MCPServer
 from botcircuits.agent.skill import LocalSkill, SkillSpec, discover_skills, parse_skill_md
-from botcircuits.agent.store import ConversationStore
+from botcircuits.agent.sessions import ConversationStore
 from botcircuits.agent.tools import LocalTool, ToolRegistry, default_registry
 from botcircuits.agent.workflow import (
     collect_agents_config,
