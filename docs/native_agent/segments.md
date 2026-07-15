@@ -44,8 +44,10 @@ a `SegmentResult` with the final text, captured branch slots, captured
 per-item facts, and a pause flag.
 
 Tools exposed to a segment = the agent's real tools *minus* workflow tools
-(the engine owns advancement; the model must not re-enter a workflow) *plus*
-synthetic capture tools:
+(the engine owns advancement; the model must not re-enter a workflow) *minus*
+`plan_and_confirm` (the workflow IS the plan — a segment never re-plans or
+re-gates the run behind another approval prompt) *plus* synthetic capture
+tools:
 
 - `record_slots` — the model reports branch/data variable values; recording
   them is the segment's terminal signal.

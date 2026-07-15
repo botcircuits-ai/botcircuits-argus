@@ -195,6 +195,42 @@ def _data_variables(flow: dict) -> list[dict]:
     return out
 
 
+def input_variables(flow: dict) -> list[dict]:
+    """Declared variables the USER must supply before the workflow can run —
+    marked `input: true` in `flow.variables`. Everything else is either
+    produced by the workflow or optional context. Unmarked workflows have no
+    pre-start collection (legacy behavior)."""
+    return [v for v in (flow.get("variables") or [])
+            if isinstance(v, dict) and v.get("input")]
+
+
+def _first_action_step_id(flow: dict) -> str | None:
+    """The first step (walking `next` from `start`) that carries an action —
+    the Tier-2 extractor uses its action text as context when resolving
+    initial inputs from the conversation."""
+    steps = flow.get("steps") or {}
+    sid = flow.get("start")
+    seen: set[str] = set()
+    while isinstance(sid, str) and sid in steps and sid not in seen:
+        seen.add(sid)
+        step = steps[sid]
+        if ((step.get("settings") or {}).get("action") or "").strip():
+            return sid
+        sid = step.get("next")
+    return None
+
+
+def _inputs_question(workflow_name: str, missing: list[dict]) -> str:
+    """The deterministic collection question for unfilled input variables —
+    built from the authored descriptions, no LLM involved."""
+    lines = [f"To run {workflow_name}, please provide:"]
+    for v in missing:
+        name = v.get("variableName", "")
+        desc = str(v.get("description") or "").strip()
+        lines.append(f"- {name}" + (f" — {desc}" if desc else ""))
+    return "\n".join(lines)
+
+
 def _eval_message(workflow_name: str, slots: dict) -> dict:
     """Build the minimal `message` shape `evaluate_choices` reads from
     (it pulls `data.sessionContext.slots`)."""
@@ -368,6 +404,37 @@ async def run_workflow_engine(
         one = resolve_tier0([v], slots, base_dir=_BASE_DIR())
         if one:
             slots.update(one)
+
+    # Initial input collection — deterministic, BEFORE the first segment.
+    # Variables marked `input: true` must be filled before the workflow can
+    # start: first try to resolve them from the conversation already at hand
+    # (the trigger args / `__last_user_message__`, via the same Tier-0/Tier-2
+    # hook branches use); whatever is still missing pauses the run with ONE
+    # authored-description question. Without this, the first segment's model
+    # improvises its own `human_feedback` ask and the user's answer never
+    # lands in the slots — the re-ask loop. `start_step_id` set means we're
+    # resuming mid-flow, where inputs were already settled.
+    inputs = input_variables(flow)
+    if start_step_id is None and inputs:
+        missing = _unfilled(inputs, slots)
+        if missing and resolve_unfilled is not None:
+            backfilled = await resolve_unfilled(
+                flow=flow,
+                step_id=_first_action_step_id(flow) or flow.get("start"),
+                variables=missing,
+                slots=slots,
+            )
+            for k, v in (backfilled or {}).items():
+                if v not in (None, ""):
+                    slots[k] = v
+            missing = _unfilled(inputs, slots)
+        if missing:
+            return EngineResult(
+                paused=True,
+                question=_inputs_question(workflow_name, missing),
+                paused_step=None,  # resume restarts collection, then the flow
+                slots=slots,
+            )
 
     # Pick the starting segment: the one whose head is the requested start
     # step, else the first segment (graph entry).

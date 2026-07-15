@@ -46,8 +46,11 @@ filesystem skills into one registry (user tools win name collisions).
                                              (≤ max_steps rounds, default 500)
 ```
 
-1. Append the user message; if a workflow is paused, resume it directly
-   (no model decision — the message *is* the answer).
+1. Append the user message, then the deterministic workflow entry runs
+   BEFORE any model decision: a paused workflow is resumed directly (the
+   message *is* the answer), and an explicit "run <workflow>" request
+   invokes that workflow tool itself (`match_workflow_trigger`) — routing
+   a named workflow never depends on the model.
 2. Call the provider with system + history + exposed tools.
 3. Interpret the response (`_interpret`): text, tool calls, terminal?
 4. Terminal → return the text. Otherwise run all tool calls concurrently,

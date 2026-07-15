@@ -40,6 +40,12 @@ MAX_SEGMENT_TURNS = 25
 # provider under the native runtime — native never spawns an external CLI.
 _IN_PROCESS_PROVIDERS = frozenset({"anthropic", "openai", "gemini", "openrouter"})
 
+# Tools hidden from segment calls (on top of workflow tools). A workflow IS
+# the plan — its steps were authored and validated up front — so the segment
+# model must not re-plan and re-gate the run behind another approval prompt.
+# `human_feedback` stays: `question` steps depend on it.
+_SEGMENT_EXCLUDED_TOOLS = frozenset({"plan_and_confirm"})
+
 
 def fired_workflow_tool(reg: ToolRegistry, tool_calls: list[ToolCall]) -> bool:
     """True when any of this turn's tool calls invoked a workflow tool —
@@ -63,11 +69,13 @@ class SegmentRunner:
     def _engine_tools(self, record_slots, record_item_list=None) -> list:
         """Tools exposed to a segment call: the agent's real tools (built-ins,
         MCP, skills) MINUS workflow tools — the engine owns advancement now,
-        so the model must not re-enter a workflow tool — PLUS the synthetic
-        capture tool(s): `record_slots` when the segment branches, or
-        `record_item_list` for a listDecision segment (S3)."""
+        so the model must not re-enter a workflow tool — MINUS
+        `_SEGMENT_EXCLUDED_TOOLS` (the workflow is already the approved plan)
+        — PLUS the synthetic capture tool(s): `record_slots` when the segment
+        branches, or `record_item_list` for a listDecision segment (S3)."""
         base = [t for t in self.tools.all()
-                if getattr(t, "_workflow_state", None) is None]
+                if getattr(t, "_workflow_state", None) is None
+                and t.name not in _SEGMENT_EXCLUDED_TOOLS]
         if record_slots is not None:
             base.append(record_slots)
         if record_item_list is not None:

@@ -49,7 +49,11 @@ from botcircuits.agent.verification import (
     test_command,
     verification_nudge,
 )
-from botcircuits.agent.workflow import active_workflow_names
+from botcircuits.agent.workflow import (
+    active_workflow_names,
+    match_workflow_trigger,
+    workflow_tool_names,
+)
 
 MAX_AGENT_STEPS = 500
 
@@ -357,8 +361,52 @@ class Agent(SegmentRunner):
         names = active_workflow_names(self.tools)
         if not names:
             return None
-        name = names[0]
+        return await self._call_workflow_tool(convo, names[0],
+                                              event_sink=event_sink)
 
+    async def _auto_workflow_call(
+        self,
+        convo,
+        user_input: str,
+        *,
+        event_sink=None,
+    ) -> tuple[ToolCall, str, bool] | None:
+        """The loop's deterministic workflow entry points, checked BEFORE any
+        provider call:
+
+        1. resume — a paused workflow consumes the user message as its answer
+           (see `_resume_active_workflow`);
+        2. trigger — an explicit "run <workflow>" request invokes that
+           workflow tool directly. Tool routing must not depend on the
+           model: smaller models answer a run request with clarifying
+           questions instead of calling the tool.
+
+        Returns the synthetic call's `(tool_call, output, is_error)` or None
+        when neither applies (the normal model-driven turn proceeds).
+        """
+        resumed = await self._resume_active_workflow(convo,
+                                                     event_sink=event_sink)
+        if resumed is not None:
+            return resumed
+        if not self.enable_workflows:
+            return None
+        name = match_workflow_trigger(user_input,
+                                      workflow_tool_names(self.tools))
+        if name is None:
+            return None
+        return await self._call_workflow_tool(convo, name,
+                                              event_sink=event_sink)
+
+    async def _call_workflow_tool(
+        self,
+        convo,
+        name: str,
+        *,
+        event_sink=None,
+    ) -> tuple[ToolCall, str, bool]:
+        """Invoke workflow tool `name` with a loop-injected (synthetic) call
+        and append the round to history, exactly as if the model had asked
+        for it."""
         tc = ToolCall(id=f"{_AUTO_RESUME_ID_PREFIX}{uuid4().hex[:8]}",
                       name=name, arguments={})
         tool_context = {
@@ -421,12 +469,11 @@ class Agent(SegmentRunner):
                 blocks=[{"type": "text", "text": user_input}],
             ))
 
-            # A paused workflow's resume doesn't need a model decision — the
-            # user's message we just appended IS the answer. Resume it
-            # directly so the next provider call (below) sees the result and
-            # relays/acts on it, instead of asking the model to notice the
-            # pause and re-call the tool itself.
-            await self._resume_active_workflow(convo)
+            # Deterministic workflow entry, before any model decision:
+            # resume a paused workflow (the message IS its answer), or
+            # trigger one the user explicitly asked to run by name. The
+            # next provider call (below) sees the result and relays it.
+            await self._auto_workflow_call(convo, user_input)
 
             for _ in range(self.max_steps):
                 self.provider.usage_purpose = "conversational"
@@ -530,19 +577,19 @@ class Agent(SegmentRunner):
             ))
 
             try:
-                # A paused workflow's resume doesn't need a model decision —
-                # the user's message we just appended IS the answer. Resume
-                # it directly (streaming its own segment events) so the next
-                # provider call below sees the result and relays/acts on it,
-                # instead of asking the model to notice the pause and re-call
-                # the tool itself.
+                # Deterministic workflow entry, before any model decision:
+                # resume a paused workflow (the message IS its answer), or
+                # trigger one the user explicitly asked to run by name —
+                # streaming its own segment events. The next provider call
+                # below sees the result and relays/acts on it.
                 resume_events: asyncio.Queue = asyncio.Queue()
 
                 async def _resume_sink(kind: str, payload):
                     await resume_events.put((kind, payload))
 
                 resume_task = asyncio.ensure_future(
-                    self._resume_active_workflow(convo, event_sink=_resume_sink)
+                    self._auto_workflow_call(convo, user_input,
+                                             event_sink=_resume_sink)
                 )
                 while not resume_task.done() or not resume_events.empty():
                     drainer = asyncio.ensure_future(resume_events.get())

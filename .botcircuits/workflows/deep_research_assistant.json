@@ -6,11 +6,13 @@
     "variables": [
       {
         "variableName": "topic",
-        "description": "The topic to research."
+        "description": "The topic to research.",
+        "input": true
       },
       {
         "variableName": "research_depth",
-        "description": "Desired depth/length of the report, e.g. 'Standard - 3-5 pages'."
+        "description": "Desired depth/length of the report, e.g. 'Standard - 3-5 pages'.",
+        "input": true
       },
       {
         "variableName": "research_findings",

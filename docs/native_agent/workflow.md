@@ -32,6 +32,33 @@ Workflows live on disk (`$BOTCIRCUITS_WORKFLOWS_DIR` or
 one into a `LocalTool` (marked with `_workflow_state`) the model can trigger
 like any other tool.
 
+Entry is defense-in-depth, ending deterministic: the tool description and a
+`## Workflows` system-prompt block (`workflows_system_prompt`) tell the model
+to call the tool immediately, and — regardless of what the model does — the
+loop itself matches explicit "run <workflow>" requests
+(`match_workflow_trigger`) and invokes the tool before any provider call.
+
+## Initial inputs — collected deterministically, before the first segment
+
+Variables marked `"input": true` in `flow.variables` are the values the
+USER must supply. On a fresh run the engine settles them before any
+segment executes:
+
+1. **Resolve from the conversation at hand** — the trigger args and the
+   last user message go through the same Tier-0/Tier-2 hook branch
+   variables use ("run deep_research on AI in finance, 3 pages" fills
+   `topic` and `research_depth` without asking).
+2. **Ask once for the rest** — still-missing inputs pause the run with ONE
+   question built from the authored descriptions (no LLM involved). The
+   user's reply resolves through the same hook on auto-resume; collected
+   values persist across the pause.
+
+Without the marker there is no pre-start collection — and without this
+stage, a segment model facing empty inputs improvises its own
+`human_feedback` ask whose answer never lands in the slots (the re-ask
+loop). The workflow builder is instructed to mark user-supplied variables
+and never author steps that ask for them.
+
 ## The engine (`workflow/engine/`)
 
 Inversion of control: once a workflow tool fires, the ENGINE owns the loop

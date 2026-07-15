@@ -393,3 +393,106 @@ def test_data_variable_absent_means_no_data_kwarg():
     res = asyncio.run(run_workflow_engine(
         _built(_branch_flow()), workflow_name="br", run_segment=run))
     assert res.done
+
+
+# -- initial input collection (input: true variables) --------------------------
+
+
+def _input_flow() -> dict:
+    """start → research (references user-supplied topic/depth)."""
+    return _built({
+        "start": "start",
+        "variables": [
+            {"variableName": "topic", "description": "The topic to research.",
+             "input": True},
+            {"variableName": "depth", "description": "Desired depth.",
+             "input": True},
+            {"variableName": "report", "description": "Produced report."},
+        ],
+        "steps": {
+            "start": {"type": "start", "next": "research"},
+            "research": {"type": "agentAction",
+                         "settings": {"action": "Research `topic` at `depth`."}},
+        },
+    })
+
+
+def test_missing_inputs_pause_before_first_segment():
+    segment_ran = {"n": 0}
+
+    async def run_segment(**kw):
+        segment_ran["n"] += 1
+        return SegmentResult(text="ok", captured_slots={})
+
+    result = asyncio.run(run_workflow_engine(
+        _input_flow(), workflow_name="wf", run_segment=run_segment,
+    ))
+    assert result.paused and not result.done
+    assert result.paused_step is None          # resume restarts collection
+    assert segment_ran["n"] == 0               # nothing ran without inputs
+    assert "topic — The topic to research." in result.question
+    assert "depth" in result.question
+    assert "report" not in result.question     # produced vars never asked
+
+
+def test_inputs_resolved_from_history_skip_the_pause():
+    """The resolve hook (Tier-0/Tier-2 over the trigger context) fills the
+    inputs — the workflow starts without asking."""
+    async def run_segment(**kw):
+        return SegmentResult(text="ok", captured_slots={})
+
+    async def resolve(*, flow, step_id, variables, slots):
+        assert {v["variableName"] for v in variables} == {"topic", "depth"}
+        return {"topic": "AI in finance", "depth": "3 pages"}
+
+    result = asyncio.run(run_workflow_engine(
+        _input_flow(), workflow_name="wf", run_segment=run_segment,
+        resolve_unfilled=resolve,
+        slots={"__last_user_message__": "run wf on AI in finance, 3 pages"},
+    ))
+    assert result.done and not result.paused
+    assert result.slots["topic"] == "AI in finance"
+
+
+def test_partial_resolution_asks_only_for_the_rest():
+    async def run_segment(**kw):
+        return SegmentResult(text="ok", captured_slots={})
+
+    async def resolve(*, flow, step_id, variables, slots):
+        return {"topic": "AI in finance"}     # depth stays missing
+
+    result = asyncio.run(run_workflow_engine(
+        _input_flow(), workflow_name="wf", run_segment=run_segment,
+        resolve_unfilled=resolve,
+    ))
+    assert result.paused
+    assert "depth" in result.question and "topic" not in result.question
+    assert result.slots["topic"] == "AI in finance"  # kept for the resume
+
+
+def test_resume_after_collection_runs_the_flow():
+    """Second call (paused_step None + previously collected slots + the
+    user's reply resolved) proceeds into the segment."""
+    async def run_segment(**kw):
+        return SegmentResult(text="ok", captured_slots={})
+
+    async def resolve(*, flow, step_id, variables, slots):
+        return {"depth": "3 pages"}  # extracted from the reply
+
+    result = asyncio.run(run_workflow_engine(
+        _input_flow(), workflow_name="wf", run_segment=run_segment,
+        resolve_unfilled=resolve,
+        slots={"topic": "AI in finance",
+               "__last_user_message__": "3 pages"},
+    ))
+    assert result.done
+
+
+def test_unmarked_workflows_never_pre_pause():
+    async def run_segment(**kw):
+        return SegmentResult(text="ok", captured_slots={})
+
+    result = asyncio.run(run_workflow_engine(
+        _built(_linear_flow()), workflow_name="wf", run_segment=run_segment,
+    ))
+    assert result.done

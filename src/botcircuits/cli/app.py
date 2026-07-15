@@ -267,6 +267,14 @@ async def amain(args: argparse.Namespace) -> int:
         if interactive and registered:
             note = "" if normalize_enabled else " (normalize=off)"
             out(C.dim(f"workflows: {', '.join(registered)}{note}"))
+        if registered:
+            # Advertise the registered workflows in the system prompt with a
+            # deterministic invocation rule — without it, smaller models
+            # treat "run <name> workflow" as an open-ended request and ask
+            # clarifying questions instead of calling the tool.
+            from botcircuits.agent.workflow import workflows_system_prompt
+            cfg.system = (cfg.system or "") + workflows_system_prompt(registered)
+            state.system = cfg.system
         if skipped:
             out(C.yellow(
                 f"[workflow] skipped (name collides with built-in tool): "
