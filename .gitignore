@@ -35,3 +35,5 @@ ref_project
 
 # per-project conversation history (durable sessions)
 .botcircuits/sessions/
+
+demos/

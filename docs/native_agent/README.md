@@ -112,6 +112,12 @@ builds a client from a short name (`anthropic` / `openai` / `gemini` /
 `openrouter`) — also used per-segment when a workflow pins a step to a named
 agent with its own model.
 
+## The UI (`src/botcircuits/cli/`)
+
+Two front-ends over the same agent (see [ui.md](ui.md)): the line REPL
+(default) and a full-screen Textual TUI (`--tui`) where approval gates are
+fail-closed modals instead of inline y/N prompts.
+
 ## Entry points
 
 - `botcircuits` (CLI) — interactive agent, `botcircuits/cli`.

@@ -97,6 +97,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--session", default=None,
                    help="Resume a session id (persisted under .botcircuits/sessions, "
                         "so it survives across CLI runs)")
+    p.add_argument("--tui", action="store_true", default=False,
+                   help="Full-screen Textual UI: conversation + activity panes, "
+                        "approval gates as modals (needs the 'tui' extra)")
 
     # Three-way streaming flag: --stream / --no-stream / unset.
     stream_group = p.add_mutually_exclusive_group()
@@ -291,6 +294,16 @@ async def amain(args: argparse.Namespace) -> int:
         # across CLI runs and `search_memory` can recall past conversations.
         store=DurableConversationStore(),
     ) as agent:
+
+        # Full-screen Textual UI (--tui): same agent, same tools, but the
+        # approval gate is a modal and pauses land in the conversation pane.
+        if getattr(args, "tui", False) and interactive:
+            from botcircuits.cli.tui_app import run_tui, run_tui_available
+            missing = run_tui_available()
+            if missing:
+                out(C.red(f"[tui] {missing}"))
+                return 2
+            return await run_tui(agent, provider, state)
 
         if interactive:
             from botcircuits.cli.banner import print_banner
