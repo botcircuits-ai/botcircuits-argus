@@ -29,8 +29,9 @@ from botcircuits.agent.sessions import (
 )
 from botcircuits.agent.tools import ToolRegistry
 from botcircuits.agent.tools.builtins.search_memory import search_memory_tool
-from botcircuits.providers.base import LLMProvider
-from botcircuits.types import LLMResponse, Message
+from botcircuits.types import Message
+
+from fakes import ScriptedProvider, text_response
 
 
 def _msg(role: str, text: str) -> Message:
@@ -168,24 +169,10 @@ def test_search_memory_tool_excludes_current_session(tmp_path, monkeypatch):
 # -- loop integration ---------------------------------------------------------
 
 
-class OneReplyProvider(LLMProvider):
-    name = "scripted"
-    model = "test"
-
+class OneReplyProvider(ScriptedProvider):
     async def complete(self, system, messages, tools, hosted_mcp,
-                       skills, max_tokens) -> LLMResponse:
-        return LLMResponse(text="ok", tool_calls=[],
-                           stop_reason="end_turn", raw=None)
-
-    async def stream(self, system, messages, tools, hosted_mcp,
-                     skills, max_tokens):
-        resp = await self.complete(system, messages, tools, hosted_mcp,
-                                   skills, max_tokens)
-        yield "text_delta", resp.text
-        yield "final", resp
-
-    async def aclose(self):
-        pass
+                       skills, max_tokens):
+        return text_response("ok")
 
 
 def test_agent_persists_after_each_turn(tmp_path):

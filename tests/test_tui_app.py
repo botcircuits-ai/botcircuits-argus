@@ -20,8 +20,8 @@ from botcircuits.agent.tools import ToolRegistry  # noqa: E402
 from botcircuits.agent.tools.registry import LocalTool  # noqa: E402
 from botcircuits.agent.tools.builtins import _confirm  # noqa: E402
 from botcircuits.cli.tui_app import _build_app, run_tui_available  # noqa: E402
-from botcircuits.providers.base import LLMProvider  # noqa: E402
-from botcircuits.types import LLMResponse, ToolCall  # noqa: E402
+
+from fakes import ScriptedProvider, text_response, tool_call_response  # noqa: E402
 
 
 class _State:
@@ -29,36 +29,19 @@ class _State:
     system = "test"
 
 
-class GatedToolProvider(LLMProvider):
+class GatedToolProvider(ScriptedProvider):
     """Round 1: call the gated tool. Round 2: final answer."""
 
-    name = "scripted"
-    model = "test"
-
     def __init__(self):
+        super().__init__()
         self.round = 0
 
     async def complete(self, system, messages, tools, hosted_mcp,
-                       skills, max_tokens) -> LLMResponse:
+                       skills, max_tokens):
         self.round += 1
         if self.round == 1:
-            return LLMResponse(text="", stop_reason="tool_use", raw=None,
-                               tool_calls=[ToolCall(id="t1", name="danger",
-                                                    arguments={})])
-        return LLMResponse(text="all done", tool_calls=[],
-                           stop_reason="end_turn", raw=None)
-
-    async def stream(self, system, messages, tools, hosted_mcp,
-                     skills, max_tokens):
-        yield "final", await self.complete(system, messages, tools,
-                                           hosted_mcp, skills, max_tokens)
-
-    async def aclose(self):
-        pass
-
-    # usage surface the TUI footer reads
-    usage_input_tokens = 0
-    usage_output_tokens = 0
+            return tool_call_response("danger", {})
+        return text_response("all done")
 
 
 def _gated_tool(ran: dict) -> LocalTool:

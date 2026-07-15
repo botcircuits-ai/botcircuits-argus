@@ -21,8 +21,9 @@ from botcircuits.agent.verification import (
     run_python,
     test_command,
 )
-from botcircuits.providers.base import LLMProvider
-from botcircuits.types import LLMResponse, Message, ToolCall
+from botcircuits.types import Message
+
+from fakes import ScriptedProvider, text_response, tool_call_response
 
 
 # -- standalone oracle --------------------------------------------------------
@@ -104,42 +105,27 @@ def test_observed_pass_pairs_run_to_exit_code():
 # -- the enforced-run gate in the loop ------------------------------------------
 
 
-class GatedProvider(LLMProvider):
+class GatedProvider(ScriptedProvider):
     """Turn 1: writes code and claims done. After a nudge: runs the test,
     then claims done again. Proves the gate injects the nudge and accepts
     only after an observed pass."""
 
-    name = "scripted"
-    model = "test"
-
     def __init__(self):
+        super().__init__()
         self.step = 0
 
     async def complete(self, system, messages, tools, hosted_mcp,
-                       skills, max_tokens) -> LLMResponse:
+                       skills, max_tokens):
         self.step += 1
         if self.step == 1:  # write code, no verification
-            return LLMResponse(text="", stop_reason="tool_use", raw=None,
-                               tool_calls=[ToolCall(id="w1", name="write_file",
-                                                    arguments={"path": "x.py"})])
+            return tool_call_response("write_file", {"path": "x.py"}, "w1")
         if self.step == 2:  # claim done without running the test
-            return LLMResponse(text="done, it works", tool_calls=[],
-                               stop_reason="end_turn", raw=None)
+            return text_response("done, it works")
         if self.step == 3:  # the nudge arrives — run the test
             assert "passing run" in messages[-1].blocks[0]["text"]
-            return LLMResponse(text="", stop_reason="tool_use", raw=None,
-                               tool_calls=[ToolCall(id="s1", name="shell_exec",
-                                                    arguments={"argv": ["pytest", "-q"]})])
-        return LLMResponse(text="verified done", tool_calls=[],
-                           stop_reason="end_turn", raw=None)
-
-    async def stream(self, system, messages, tools, hosted_mcp,
-                     skills, max_tokens):
-        yield "final", await self.complete(system, messages, tools,
-                                           hosted_mcp, skills, max_tokens)
-
-    async def aclose(self):
-        pass
+            return tool_call_response("shell_exec",
+                                      {"argv": ["pytest", "-q"]}, "s1")
+        return text_response("verified done")
 
 
 def _fake_tools() -> ToolRegistry:
@@ -217,33 +203,21 @@ def test_gate_opt_out_with_require_run_false(tmp_path):
 def test_gate_gives_up_after_verify_attempts(tmp_path):
     _agents_md(tmp_path)
 
-    class StubbornProvider(LLMProvider):
+    class StubbornProvider(ScriptedProvider):
         """Writes code, then keeps claiming done without ever running tests."""
-        name = "scripted"
-        model = "test"
 
         def __init__(self):
+            super().__init__()
             self.claims = 0
 
         async def complete(self, system, messages, tools, hosted_mcp,
-                           skills, max_tokens) -> LLMResponse:
+                           skills, max_tokens):
             if self.claims == 0 and not any(
                     b.get("type") == "tool_call"
                     for m in messages for b in m.blocks):
-                return LLMResponse(text="", stop_reason="tool_use", raw=None,
-                                   tool_calls=[ToolCall(id="w1", name="write_file",
-                                                        arguments={"path": "x.py"})])
+                return tool_call_response("write_file", {"path": "x.py"}, "w1")
             self.claims += 1
-            return LLMResponse(text="trust me", tool_calls=[],
-                               stop_reason="end_turn", raw=None)
-
-        async def stream(self, system, messages, tools, hosted_mcp,
-                         skills, max_tokens):
-            yield "final", await self.complete(system, messages, tools,
-                                               hosted_mcp, skills, max_tokens)
-
-        async def aclose(self):
-            pass
+            return text_response("trust me")
 
     async def run():
         provider = StubbornProvider()

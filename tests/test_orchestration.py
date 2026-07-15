@@ -12,34 +12,22 @@ from __future__ import annotations
 import asyncio
 
 from botcircuits.agent.orchestration import Orchestrator
-from botcircuits.providers.base import LLMProvider
-from botcircuits.types import LLMResponse
+
+from fakes import ScriptedProvider as _Scripted, text_response
 
 
-class ScriptedProvider(LLMProvider):
-    """Plays back one canned LLMResponse per call, in order."""
-
-    name = "scripted"
-    model = "test"
+class ScriptedProvider(_Scripted):
+    """Plays back canned text replies in order; records each prompt seen."""
 
     def __init__(self, responses: list[str]):
-        self.responses = list(responses)
+        super().__init__([text_response(t) for t in responses])
         self.calls: list[str] = []
 
     async def complete(self, system, messages, tools, hosted_mcp,
-                       skills, max_tokens) -> LLMResponse:
+                       skills, max_tokens):
         self.calls.append(messages[-1].blocks[0]["text"])
-        return LLMResponse(text=self.responses.pop(0), tool_calls=[],
-                           stop_reason="end_turn", raw=None)
-
-    async def stream(self, system, messages, tools, hosted_mcp,
-                     skills, max_tokens):
-        resp = await self.complete(system, messages, tools, hosted_mcp,
-                                   skills, max_tokens)
-        yield "final", resp
-
-    async def aclose(self):
-        pass
+        return await super().complete(system, messages, tools, hosted_mcp,
+                                      skills, max_tokens)
 
 
 def test_plan_parses_json_array():

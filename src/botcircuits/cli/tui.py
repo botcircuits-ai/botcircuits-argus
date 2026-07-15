@@ -50,10 +50,6 @@ def _make_key_bindings() -> KeyBindings:
     return kb
 
 
-# Sentinel returned by read_message() on EOF.
-_EOF = None
-
-
 class TUISession:
     """Manages the prompt-toolkit session and background task lifecycle."""
 

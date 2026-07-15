@@ -19,33 +19,19 @@ from botcircuits.agent.subagents import (
 )
 from botcircuits.agent.tools import ToolRegistry
 from botcircuits.agent.tools.registry import LocalTool
-from botcircuits.providers.base import LLMProvider
-from botcircuits.types import LLMResponse
+
+from fakes import ScriptedProvider, text_response
 
 
-class EchoProvider(LLMProvider):
-    """Replies deterministically with the task text; counts calls."""
+class EchoProvider(ScriptedProvider):
+    """Replies deterministically with the task text."""
 
     name = "echo"
-    model = "test"
-
-    def __init__(self):
-        self.calls = 0
 
     async def complete(self, system, messages, tools, hosted_mcp,
-                       skills, max_tokens) -> LLMResponse:
-        self.calls += 1
+                       skills, max_tokens):
         task = messages[-1].blocks[0]["text"]
-        return LLMResponse(text=f"answer: {task}", tool_calls=[],
-                           stop_reason="end_turn", raw=None)
-
-    async def stream(self, system, messages, tools, hosted_mcp,
-                     skills, max_tokens):
-        yield "final", await self.complete(system, messages, tools,
-                                           hosted_mcp, skills, max_tokens)
-
-    async def aclose(self):
-        pass
+        return text_response(f"answer: {task}")
 
 
 def _tool(name: str) -> LocalTool:

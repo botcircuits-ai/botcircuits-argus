@@ -23,27 +23,23 @@ import botcircuits.agent.workflow.local as wf_local
 from botcircuits.agent.loop import Agent
 from botcircuits.agent.tools import ToolRegistry
 from botcircuits.agent.workflow import collect_agents_config
-from botcircuits.providers.base import LLMProvider
 from botcircuits.types import LLMResponse
 
+from fakes import ScriptedProvider, text_response
 
-class _StubProvider(LLMProvider):
+
+class _StubProvider(ScriptedProvider):
     """Minimal provider; identity is its `model` so we can assert which one
     a segment actually used."""
 
     name = "stub"
 
     def __init__(self, model: str):
+        super().__init__()
         self.model = model
-        self.usage_input_tokens = 0
-        self.usage_output_tokens = 0
-        self.usage_llm_calls = 0
 
     async def complete(self, *a, **k) -> LLMResponse:
-        return LLMResponse(text="", tool_calls=[], stop_reason="end_turn", raw=None)
-
-    async def stream(self, *a, **k):
-        yield ("final", await self.complete())
+        return text_response("")
 
 
 def _agent(agents_config: dict) -> Agent:
