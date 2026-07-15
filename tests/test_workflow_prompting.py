@@ -22,6 +22,7 @@ from botcircuits.agent.loop import Agent
 from botcircuits.agent.tools import ToolRegistry
 from botcircuits.agent.workflow import (
     match_workflow_trigger,
+    strip_workflow_trigger,
     workflow_tool,
     workflows_system_prompt,
 )
@@ -90,6 +91,50 @@ def test_trigger_ignores_questions_and_non_run_text():
     assert match_workflow_trigger("run the tests", names) is None
     # substring of another word must not match
     assert match_workflow_trigger("run ai_trends_v2", names) is None
+
+
+# -- trigger stripping: the command must never become a variable value ---------
+
+
+def test_strip_removes_pure_command_entirely():
+    assert strip_workflow_trigger("run deep_research_assistant", "deep_research_assistant") == ""
+    assert strip_workflow_trigger("please start ai_trends workflow now", "ai_trends") == ""
+
+
+def test_strip_keeps_the_actual_input():
+    out = strip_workflow_trigger(
+        "run deep_research_assistant on AI in finance, 3 pages",
+        "deep_research_assistant")
+    assert "AI in finance" in out and "3 pages" in out
+    assert "deep_research_assistant" not in out
+
+
+def test_triggered_workflow_receives_stripped_context():
+    """The tool context's last_user_message for a triggered call is the
+    remainder after the command phrase — "" for a bare "run <name>"."""
+    seen: dict = {}
+
+    def _handler(args: dict, context: dict | None = None) -> str:
+        seen["last_user_message"] = (context or {}).get("last_user_message")
+        return "done"
+
+    from botcircuits.agent.tools.registry import LocalTool
+    wf = LocalTool(name="wf_x", description="t",
+                   input_schema={"type": "object", "properties": {}},
+                   handler=_handler)
+    wf._workflow_state = {}
+    reg = ToolRegistry()
+    reg.register(wf)
+
+    provider = ScriptedProvider([text_response("ok")])
+
+    async def run():
+        agent = Agent(provider=provider, tools=reg, local_skills_paths=[],
+                      enable_subagents=False)
+        await agent.chat("run wf_x workflow")
+
+    asyncio.run(run())
+    assert seen["last_user_message"] == ""
 
 
 # -- segment tool surface -------------------------------------------------------

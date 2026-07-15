@@ -12,6 +12,7 @@ Public surface:
 from __future__ import annotations
 
 import re
+import string
 
 from botcircuits.agent.tools import LocalTool, ToolRegistry
 from botcircuits.providers.base import LLMProvider
@@ -499,6 +500,36 @@ def match_workflow_trigger(text: str, names: list[str]) -> str | None:
         if re.search(rf"(?<![\w-]){re.escape(name.lower())}(?![\w-])", lowered):
             return name
     return None
+
+
+#: Filler around a trigger phrase — dropped when checking whether anything
+#: meaningful remains after the workflow name is removed.
+_TRIGGER_FILLER = frozenset({
+    "run", "runs", "running", "start", "starts", "execute", "launch",
+    "kick", "off", "trigger", "workflow", "the", "a", "an", "please",
+    "now", "again", "this", "that", "wf",
+})
+
+
+def strip_workflow_trigger(text: str, name: str) -> str:
+    """The part of a trigger message that is actual INPUT, not command.
+
+    "run deep_research_assistant on AI in finance, 3 pages" →
+    "on AI in finance, 3 pages"; "run deep_research_assistant workflow" →
+    "" (nothing left but the command). The loop feeds this — not the raw
+    message — to the workflow call as `last_user_message`, so slot
+    extraction (Tier-0/Tier-2) can never mistake the command itself for a
+    variable value (e.g. topic = "run deep_research_assistant").
+    """
+    out = re.sub(rf"(?<![\w-]){re.escape(name)}(?![\w-])", " ",
+                 text, flags=re.IGNORECASE)
+    tokens = out.split()
+    meaningful = [t for t in tokens
+                  if t.strip(string.punctuation)
+                  and t.strip(string.punctuation).lower() not in _TRIGGER_FILLER]
+    if not meaningful:
+        return ""
+    return " ".join(tokens).strip()
 
 
 def workflows_system_prompt(names: list[str]) -> str:

@@ -214,13 +214,14 @@ class SegmentRunner:
                     paused=True, question=paused_question,
                 )
 
-            # `record_slots` / `record_item_list` is the segment's terminal
-            # signal: once the model reports the branch values (or the per-item
-            # fact list), the engine has what it needs to decide, so we stop
-            # spending provider round-trips on this segment. (Non-branching
-            # segments have neither tool and terminate naturally when the model
-            # stops calling tools.)
-            if recorded_slots or recorded_items:
+            # For a BRANCHING segment (or a listDecision), the recorded values
+            # are the decision payload the engine is waiting on — stop spending
+            # provider round-trips once they land. A DATA-ONLY record is NOT
+            # terminal: the segment may still have actions left to perform
+            # (e.g. write the just-recorded report to disk), so it keeps
+            # looping and terminates naturally when the model stops calling
+            # tools.
+            if recorded_items or (recorded_slots and branch_variables):
                 break
 
         return SegmentResult(

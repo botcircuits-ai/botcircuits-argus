@@ -49,8 +49,11 @@ Tools exposed to a segment = the agent's real tools *minus* workflow tools
 re-gates the run behind another approval prompt) *plus* synthetic capture
 tools:
 
-- `record_slots` — the model reports branch/data variable values; recording
-  them is the segment's terminal signal.
+- `record_slots` — the model reports branch/data variable values. Recording
+  is terminal only for a BRANCHING segment (the engine is waiting on the
+  values to decide); a data-only record captures and keeps looping, so
+  actions after the record (e.g. writing the recorded report to disk)
+  still run.
 - `record_item_list` — for a `listDecision` segment, per-item fact-sets the
   engine then decides deterministically.
 

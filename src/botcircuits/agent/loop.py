@@ -52,6 +52,7 @@ from botcircuits.agent.verification import (
 from botcircuits.agent.workflow import (
     active_workflow_names,
     match_workflow_trigger,
+    strip_workflow_trigger,
     workflow_tool_names,
 )
 
@@ -394,8 +395,13 @@ class Agent(SegmentRunner):
                                       workflow_tool_names(self.tools))
         if name is None:
             return None
-        return await self._call_workflow_tool(convo, name,
-                                              event_sink=event_sink)
+        # The trigger message is COMMAND, not input: hand the workflow only
+        # what remains after the trigger phrase is stripped, so slot
+        # extraction can't mistake "run <name>" for a variable value.
+        return await self._call_workflow_tool(
+            convo, name, event_sink=event_sink,
+            last_user_message=strip_workflow_trigger(user_input, name),
+        )
 
     async def _call_workflow_tool(
         self,
@@ -403,15 +409,20 @@ class Agent(SegmentRunner):
         name: str,
         *,
         event_sink=None,
+        last_user_message: str | None = None,
     ) -> tuple[ToolCall, str, bool]:
         """Invoke workflow tool `name` with a loop-injected (synthetic) call
         and append the round to history, exactly as if the model had asked
-        for it."""
+        for it. `last_user_message`, when given, overrides the transcript's
+        last user text in the tool context (the trigger path passes the
+        message with its command phrase stripped)."""
         tc = ToolCall(id=f"{_AUTO_RESUME_ID_PREFIX}{uuid4().hex[:8]}",
                       name=name, arguments={})
         tool_context = {
             "last_assistant_message": last_assistant_text(convo.messages),
-            "last_user_message": last_user_text(convo.messages),
+            "last_user_message": (last_user_message
+                                  if last_user_message is not None
+                                  else last_user_text(convo.messages)),
             "session_id": convo.session_id,
             "run_segment": self._make_segment_runner(event_sink=event_sink),
             "event_sink": event_sink,
