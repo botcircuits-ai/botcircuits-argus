@@ -4,7 +4,8 @@ Persistent, bounded, curated notes that survive across sessions (modeled on
 Hermes Agent's memory feature).
 
 ```
- ~/.botcircuits/memories/
+ .botcircuits/memories/  (project-local if ./.botcircuits exists,
+                          else ~/.botcircuits/memories/)
    MEMORY.md ──┐                       session N            session N+1
    USER.md  ──┤  read ONCE at         ┌──────────┐         ┌──────────┐
               └─ session creation ──► │ frozen in │         │ fresh    │
@@ -19,7 +20,11 @@ Hermes Agent's memory feature).
                                                cache-stable)
 ```
 
-Two flat files under `~/.botcircuits/memories/`:
+Two flat files under `.botcircuits/memories/`. The location resolves like
+the rest of the `.botcircuits/` surface (sessions, workflows, settings):
+project-local when the working directory has a `.botcircuits/` folder —
+each project keeps its own notes — else the global
+`~/.botcircuits/memories/`; `$BOTCIRCUITS_MEMORY_DIR` overrides both.
 
 | File | Content | Cap |
 |---|---|---|

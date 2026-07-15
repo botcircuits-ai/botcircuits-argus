@@ -93,6 +93,56 @@ def test_trigger_ignores_questions_and_non_run_text():
     assert match_workflow_trigger("run ai_trends_v2", names) is None
 
 
+# -- model-issued trigger args can't poison produced variables -----------------
+
+
+def test_trigger_args_seed_only_input_variables(tmp_path, monkeypatch):
+    """A model-issued workflow call sometimes pads its args with junk for
+    PRODUCED variables (research_report: "N/A"). With `input: true` marks
+    declared, only input variables may be seeded from the call."""
+    record = {
+        "name": "wf_r",
+        "description": "research",
+        "flow": {
+            "start": "start",
+            "variables": [
+                {"variableName": "topic", "description": "the topic",
+                 "input": True},
+                {"variableName": "report", "description": "produced report"},
+            ],
+            "steps": {
+                "start": {"type": "start", "next": "s1"},
+                "s1": {"type": "agentAction",
+                       "settings": {"action": "Research `topic` into `report`."}},
+            },
+        },
+    }
+    monkeypatch.setenv(wf_local.WORKFLOWS_DIR_ENV, str(tmp_path))
+    build = tmp_path / ".build"
+    build.mkdir(parents=True)
+    (build / "wf_r.json").write_text(json.dumps(record))
+    wf_local._SESSIONS.clear()
+
+    seen: dict = {}
+
+    async def run_segment(**kw):
+        seen.update(kw)
+        from botcircuits.agent.workflow.engine.runner import SegmentResult
+        return SegmentResult(text="ok", captured_slots={})
+
+    tool = workflow_tool(record)
+
+    async def run():
+        return await tool.handler(
+            {"topic": "AI in finance", "report": "N/A"},
+            {"run_segment": run_segment, "last_user_message": ""},
+        )
+
+    asyncio.run(run())
+    assert seen["slots"]["topic"] == "AI in finance"
+    assert "report" not in seen["slots"]  # junk for a produced var dropped
+
+
 # -- trigger stripping: the command must never become a variable value ---------
 
 

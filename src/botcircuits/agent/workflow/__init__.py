@@ -179,11 +179,22 @@ async def _run_engine(
         raise LocalWorkflowError(f"workflow {wf_name!r} is missing flow")
 
     # Resume from a prior pause if there is one; otherwise start fresh and
-    # seed slots from the trigger call's args.
+    # seed slots from the trigger call's args. When the flow declares
+    # `input: true` variables, only THOSE may be seeded from a model-issued
+    # trigger call — the model sometimes pads the call with junk for
+    # produced variables (research_report: "N/A"), which must never
+    # pre-poison the run's outputs. Flows without input marks keep the
+    # legacy anything-goes seeding.
+    from botcircuits.agent.workflow.engine.runner import input_variables
+
     resume_step = state.get("engine_paused_step")
     slots = dict(state.get("engine_slots") or {})
     if resume_step is None:
-        slots.update({k: v for k, v in (args or {}).items() if v not in (None, "")})
+        allowed = {v.get("variableName") for v in input_variables(flow)}
+        slots.update({
+            k: v for k, v in (args or {}).items()
+            if v not in (None, "") and (not allowed or k in allowed)
+        })
     # Reserved key the Tier-0 resolver reads as the freshest user context
     # (deterministic choice-value / typed extraction). Stripped from the
     # final slots before the summary so it never leaks into output.
