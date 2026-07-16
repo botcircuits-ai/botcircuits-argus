@@ -11,11 +11,23 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from botcircuits.agent.workflow.engine.runner import (
     SegmentResult,
     run_workflow_engine,
 )
 from botcircuits.agent.workflow.engine.segments import compute_segments
+
+
+@pytest.fixture(autouse=True)
+def _isolated_workflows_dir(tmp_path, monkeypatch):
+    """Point the workflows dir at a temp location for EVERY test here: the
+    engine persists last-run inputs (`.last_inputs/`) on completion, and
+    that must never land in — or be read from — the developer's real
+    `.botcircuits/workflows`."""
+    import botcircuits.agent.workflow.local as wf_local
+    monkeypatch.setenv(wf_local.WORKFLOWS_DIR_ENV, str(tmp_path / "wfdir"))
 
 
 def _built(flow: dict) -> dict:
@@ -496,3 +508,127 @@ def test_unmarked_workflows_never_pre_pause():
         _built(_linear_flow()), workflow_name="wf", run_segment=run_segment,
     ))
     assert result.done
+
+
+# -- remembered inputs: offer, never silently reuse -----------------------------
+
+
+def _remember(tmp_path, monkeypatch, values: dict, name="wf"):
+    import botcircuits.agent.workflow.local as wf_local
+    monkeypatch.setenv(wf_local.WORKFLOWS_DIR_ENV, str(tmp_path))
+    import json as _json
+    d = tmp_path / ".last_inputs"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{name}.json").write_text(_json.dumps(values))
+
+
+async def _noop_segment(**kw):
+    return SegmentResult(text="ok", captured_slots={})
+
+
+def _run(flow, slots=None, resolve=None):
+    return asyncio.run(run_workflow_engine(
+        flow, workflow_name="wf", run_segment=_noop_segment,
+        slots=slots or {}, resolve_unfilled=resolve,
+    ))
+
+
+def test_completed_run_saves_input_values(tmp_path, monkeypatch):
+    import botcircuits.agent.workflow.local as wf_local
+    monkeypatch.setenv(wf_local.WORKFLOWS_DIR_ENV, str(tmp_path))
+    result = _run(_input_flow(), slots={"topic": "AI", "depth": "3 pages"})
+    assert result.done
+    import json as _json
+    saved = _json.loads((tmp_path / ".last_inputs" / "wf.json").read_text())
+    assert saved == {"topic": "AI", "depth": "3 pages"}
+
+
+def test_remembered_values_are_offered_not_reused(tmp_path, monkeypatch):
+    from botcircuits.agent.workflow.engine.runner import PENDING_REUSE_KEY
+    _remember(tmp_path, monkeypatch, {"topic": "AI", "depth": "3 pages"})
+    result = _run(_input_flow())
+    assert result.paused
+    assert "from the last run" in result.question
+    assert "topic: AI" in result.question and "depth: 3 pages" in result.question
+    assert result.slots[PENDING_REUSE_KEY] == {"topic": "AI", "depth": "3 pages"}
+
+
+def test_reuse_reply_yes_variants_adopt_all(tmp_path, monkeypatch):
+    _remember(tmp_path, monkeypatch, {"topic": "AI", "depth": "3 pages"})
+    for reply in ("yes", "yes use", "y", "ok", "sure", "use them", "go ahead"):
+        first = _run(_input_flow())
+        resumed = _run(_input_flow(),
+                       slots={**first.slots, "__last_user_message__": reply})
+        assert resumed.done, f"reply {reply!r} did not adopt the offer"
+        assert resumed.slots["topic"] == "AI"
+
+
+def test_reuse_reply_no_falls_back_to_normal_collection(tmp_path, monkeypatch):
+    _remember(tmp_path, monkeypatch, {"topic": "AI", "depth": "3 pages"})
+    first = _run(_input_flow())
+    resumed = _run(_input_flow(),
+                   slots={**first.slots, "__last_user_message__": "no"})
+    assert resumed.paused
+    assert "please provide" in resumed.question       # the normal ask
+    assert "from the last run" not in resumed.question  # offered only once
+    assert "topic" in resumed.question and "depth" in resumed.question
+
+
+def test_reuse_reply_change_one_keeps_the_others(tmp_path, monkeypatch):
+    _remember(tmp_path, monkeypatch, {"topic": "AI", "depth": "3 pages"})
+    first = _run(_input_flow())
+    resumed = _run(_input_flow(),
+                   slots={**first.slots,
+                          "__last_user_message__": "i want to change depth"})
+    assert resumed.paused
+    assert resumed.slots["topic"] == "AI"              # kept
+    assert "depth" in resumed.question and "topic" not in resumed.question
+
+
+def test_reuse_reply_change_with_value_extracts_it(tmp_path, monkeypatch):
+    """"change depth to 5 pages" — the mentioned variable is dropped from the
+    offer AND the reply stays available for extraction, so the new value
+    lands without another ask."""
+    _remember(tmp_path, monkeypatch, {"topic": "AI", "depth": "3 pages"})
+
+    async def resolve(*, flow, step_id, variables, slots):
+        assert [v["variableName"] for v in variables] == ["depth"]
+        assert "5 pages" in slots.get("__last_user_message__", "")
+        return {"depth": "5 pages"}
+
+    first = _run(_input_flow())
+    resumed = _run(_input_flow(), resolve=resolve,
+                   slots={**first.slots,
+                          "__last_user_message__": "change depth to 5 pages"})
+    assert resumed.done
+    assert resumed.slots["topic"] == "AI"
+    assert resumed.slots["depth"] == "5 pages"
+
+
+def test_reuse_reply_free_form_is_treated_as_fresh_input(tmp_path, monkeypatch):
+    _remember(tmp_path, monkeypatch, {"topic": "AI", "depth": "3 pages"})
+
+    async def resolve(*, flow, step_id, variables, slots):
+        return {"topic": "Robotics", "depth": "2 pages"}
+
+    first = _run(_input_flow())
+    resumed = _run(_input_flow(), resolve=resolve,
+                   slots={**first.slots,
+                          "__last_user_message__": "Robotics, 2 pages"})
+    assert resumed.done
+    assert resumed.slots["topic"] == "Robotics"   # remembered NOT adopted
+
+
+def test_change_mention_matches_description_words():
+    """"change pages" refers to research_depth via its description."""
+    from botcircuits.agent.workflow.engine.runner import interpret_reuse_reply
+    variables = [
+        {"variableName": "topic", "description": "The topic to research."},
+        {"variableName": "research_depth",
+         "description": "Desired length in pages."},
+    ]
+    offer = {"topic": "AI", "research_depth": "3 pages"}
+    accepted, consume = interpret_reuse_reply(
+        "i want to change pages", offer, variables)
+    assert accepted == {"topic": "AI"}
+    assert consume is False  # reply stays available for value extraction
