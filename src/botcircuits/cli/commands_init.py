@@ -28,10 +28,10 @@ import json
 from pathlib import Path
 
 from botcircuits.cli.ansi import C, out
-from botcircuits.cli.commands_skills import _AGENT_TARGETS, _cmd_install
+from botcircuits.cli.commands_skills import _cmd_install
 from botcircuits.cli.settings import SETTINGS_DIR, SHARED_FILE
 from botcircuits.cli.config import _read_raw
-from botcircuits.runtime.detect import NATIVE, CLAUDE_CODE, CODEX, HERMES, OPENCLAW
+from botcircuits.runtime.detect import NATIVE, CLAUDE_CODE, HERMES
 
 #: Host agent runtimes selectable via `--runtime`. `native` pins the
 #: in-process agent — its workflow tools (`build_workflow` and each

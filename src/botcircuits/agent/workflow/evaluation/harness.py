@@ -50,7 +50,6 @@ I/O separate makes the harness importable from tests.
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import asdict, replace
 
 from botcircuits.providers.base import LLMProvider

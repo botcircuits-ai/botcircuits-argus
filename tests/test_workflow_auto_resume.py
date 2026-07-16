@@ -16,12 +16,16 @@ import asyncio
 import json
 
 import botcircuits.agent.workflow.local as wf_local
-from botcircuits.agent.core import Agent
+from botcircuits.agent.loop import Agent
 from botcircuits.agent.tools import ToolRegistry
 from botcircuits.agent.tools.builtins.human_feedback import HUMAN_FEEDBACK_TOOL
 from botcircuits.agent.workflow import active_workflow_names, workflow_tool
-from botcircuits.providers.base import LLMProvider
-from botcircuits.types import LLMResponse, ToolCall
+
+from fakes import (
+    ScriptedProvider,
+    text_response as _text,
+    tool_call_response as _call,
+)
 
 
 def _question_record() -> dict:
@@ -53,36 +57,6 @@ def _write_build(tmp_path, record: dict) -> None:
     (build / f"{record['name']}.json").write_text(
         json.dumps(record), encoding="utf-8"
     )
-
-
-def _text(text: str) -> LLMResponse:
-    return LLMResponse(text=text, tool_calls=[], stop_reason="end_turn", raw=None)
-
-
-def _call(name: str, args: dict, call_id: str = "t1") -> LLMResponse:
-    return LLMResponse(
-        text="", stop_reason="tool_use", raw=None,
-        tool_calls=[ToolCall(id=call_id, name=name, arguments=args)],
-    )
-
-
-class ScriptedProvider(LLMProvider):
-    """Plays back one canned LLMResponse per `complete()` call, in order."""
-
-    name = "scripted"
-    model = "test"
-
-    def __init__(self, responses: list[LLMResponse]):
-        self.responses = list(responses)
-
-    async def complete(self, system, messages, tools, hosted_mcp,
-                       skills, max_tokens) -> LLMResponse:
-        return self.responses.pop(0)
-
-    async def stream(self, system, messages, tools, hosted_mcp,
-                     skills, max_tokens):
-        yield ("final", await self.complete(
-            system, messages, tools, hosted_mcp, skills, max_tokens))
 
 
 def test_chat_auto_resumes_paused_workflow_without_model_recall(tmp_path, monkeypatch):

@@ -28,24 +28,6 @@ def _steps(doc: dict) -> dict:
     return s if isinstance(s, dict) else {}
 
 
-def _declared_var_names(doc: dict) -> set[str]:
-    flow = doc.get("flow") or {}
-    out: set[str] = set()
-    for v in flow.get("variables") or []:
-        if isinstance(v, dict) and isinstance(v.get("variableName"), str):
-            out.add(v["variableName"])
-    # plus per-item variables on listDecision steps
-    for step in _steps(doc).values():
-        iv = step.get("itemVariables") if isinstance(step, dict) else None
-        if isinstance(iv, list):
-            for v in iv:
-                if isinstance(v, dict) and isinstance(v.get("variableName"), str):
-                    out.add(v["variableName"])
-        elif isinstance(iv, dict):
-            out.update(k for k in iv if isinstance(k, str))
-    return out
-
-
 def _dig(data: Any, path: str) -> Any:
     cur = data
     for part in str(path).split("."):
@@ -117,7 +99,6 @@ def static_issues(doc: dict, *, base_dir: Path | None = None) -> list[str]:
     if isinstance(start, str) and start not in steps:
         issues.append(f"`flow.start` ('{start}') is not a defined step.")
 
-    declared = _declared_var_names(doc)
     declared_agents = doc.get("agents")
     declared_agents = declared_agents if isinstance(declared_agents, dict) else {}
 
@@ -170,7 +151,6 @@ def static_issues(doc: dict, *, base_dir: Path | None = None) -> list[str]:
         if not isinstance(step, dict):
             continue
         stype = step.get("type")
-        action = (step.get("settings") or {}).get("action", "")
 
         # A step pinned to a named agent must have that name declared in the
         # top-level `agents` map, or the reference is a typo/leftover that

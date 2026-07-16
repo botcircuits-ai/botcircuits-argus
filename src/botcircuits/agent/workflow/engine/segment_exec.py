@@ -103,9 +103,10 @@ def build_record_slots_tool(
     return LocalTool(
         name=RECORD_SLOTS_TOOL,
         description=(
-            "Report the workflow branch variables you observed while "
-            "performing this segment's actions. Call once, after the "
-            "actions are done. Pass only values you genuinely have."
+            "Report the workflow variables you observed while performing "
+            "this segment's actions. Call once, as your LAST step — only "
+            "after EVERY action (including file writes and other side "
+            "effects) is fully done. Pass only values you genuinely have."
         ),
         input_schema={"type": "object", "properties": properties},
         handler=_handler,

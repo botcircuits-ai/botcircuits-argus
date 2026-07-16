@@ -7,7 +7,6 @@ Used by both the pytest suite (`test_task_completion.py`) and as a CLI
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
 import sys
 from pathlib import Path

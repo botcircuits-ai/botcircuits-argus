@@ -31,4 +31,11 @@ CLAUDE.md
 
 .hermes
 
+ref_project
 
+# per-project conversation history (durable sessions)
+.botcircuits/sessions/
+
+demos/
+.botcircuits/memories/
+.botcircuits/workflows/.last_inputs/

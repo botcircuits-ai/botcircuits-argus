@@ -20,7 +20,7 @@ def make_provider(kind: str, model: str | None) -> LLMProvider:
     own default.
 
     Shared factory so callers that need to build a provider dynamically
-    (e.g. `NativeRuntime` resolving a per-agent model override) don't
+    (e.g. the segment runner resolving a per-agent model override) don't
     duplicate the provider-name → class mapping.
     """
     if kind == "openai":

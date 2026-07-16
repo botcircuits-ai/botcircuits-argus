@@ -16,12 +16,16 @@ import asyncio
 import json
 
 import botcircuits.agent.workflow.local as wf_local
-from botcircuits.agent.core import Agent
+from botcircuits.agent.loop import Agent
 from botcircuits.agent.tools import ToolRegistry
 from botcircuits.agent.workflow import workflow_tool
 from botcircuits.agent.workflow.engine.segment_exec import RECORD_SLOTS_TOOL
-from botcircuits.providers.base import LLMProvider
-from botcircuits.types import LLMResponse, ToolCall
+
+from fakes import (
+    ScriptedProvider,
+    text_response as _text,
+    tool_call_response as _call,
+)
 
 
 def _var(name: str, dtype: str = "string", description: str = "") -> dict:
@@ -77,38 +81,6 @@ def _write_build(tmp_path, record: dict) -> None:
     )
 
 
-class ScriptedProvider(LLMProvider):
-    """Plays back canned LLMResponses; records each system prompt seen."""
-
-    name = "scripted"
-    model = "test"
-
-    def __init__(self, responses: list[LLMResponse]):
-        self.responses = list(responses)
-        self.seen_systems: list[str] = []
-
-    async def complete(self, system, messages, tools, hosted_mcp,
-                       skills, max_tokens) -> LLMResponse:
-        self.seen_systems.append(system or "")
-        return self.responses.pop(0)
-
-    async def stream(self, system, messages, tools, hosted_mcp,
-                     skills, max_tokens):
-        yield ("final", await self.complete(
-            system, messages, tools, hosted_mcp, skills, max_tokens))
-
-
-def _text(text: str) -> LLMResponse:
-    return LLMResponse(text=text, tool_calls=[], stop_reason="end_turn", raw=None)
-
-
-def _call(name: str, args: dict) -> LLMResponse:
-    return LLMResponse(
-        text="", stop_reason="tool_use", raw=None,
-        tool_calls=[ToolCall(id="t1", name=name, arguments=args)],
-    )
-
-
 def test_engine_drives_workflow_end_to_end(tmp_path, monkeypatch):
     """End-to-end through the REAL agent loop in engine-driven mode: the
     model kicks off the workflow with one tool call, then the ENGINE owns
@@ -124,14 +96,14 @@ def test_engine_drives_workflow_end_to_end(tmp_path, monkeypatch):
 
     from botcircuits.agent.workflow.engine.segment_exec import ENGINE_SYSTEM_PROMPT
 
-    class RoutingProvider(LLMProvider):
+    class RoutingProvider(ScriptedProvider):
         """Routes by system prompt: the engine-mode prompt → segment
         responses (perform action, record slots); anything else → the main
         conversational loop responses."""
         name = "routing"
-        model = "test"
 
         def __init__(self):
+            super().__init__()
             self.segment_calls = 0
 
         async def complete(self, system, messages, tools, hosted_mcp,
@@ -144,12 +116,9 @@ def test_engine_drives_workflow_end_to_end(tmp_path, monkeypatch):
                     getattr(t, "name", "") == RECORD_SLOTS_TOOL for t in tools
                 )
                 if has_record:
-                    return LLMResponse(
-                        text="checked", stop_reason="tool_use", raw=None,
-                        tool_calls=[ToolCall(
-                            id=f"rs{self.segment_calls}", name=RECORD_SLOTS_TOOL,
-                            arguments={"order_status": "delivered"})],
-                    )
+                    return _call(
+                        RECORD_SLOTS_TOOL, {"order_status": "delivered"},
+                        call_id=f"rs{self.segment_calls}")
                 return _text("acted on the segment")
             # Main loop: round 1 triggers the workflow; round 2 (after the
             # summary result) is the final reply.
@@ -160,11 +129,6 @@ def test_engine_drives_workflow_end_to_end(tmp_path, monkeypatch):
             if not triggered:
                 return _call("wf_branch", {})
             return _text("all done")
-
-        async def stream(self, system, messages, tools, hosted_mcp,
-                         skills, max_tokens):
-            yield ("final", await self.complete(
-                system, messages, tools, hosted_mcp, skills, max_tokens))
 
     provider = RoutingProvider()
     reg = ToolRegistry()

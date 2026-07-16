@@ -16,6 +16,23 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from typing import Awaitable, Callable, Optional
+
+# A UI-provided confirmation handler: async (title, lines, prompt) -> bool.
+# When registered (the Textual TUI does this on mount), it OWNS the whole
+# interaction — rendering the proposal and collecting the decision (e.g. an
+# approval modal) — so confirm() must not print anything itself.
+Confirmer = Callable[[str, list, str], Awaitable[bool]]
+_CONFIRMER: Optional[Confirmer] = None
+
+
+def set_confirmer(fn: Optional[Confirmer]) -> None:
+    global _CONFIRMER
+    _CONFIRMER = fn
+
+
+def get_confirmer() -> Optional[Confirmer]:
+    return _CONFIRMER
 
 
 def effective_auto(auto: bool) -> bool:
@@ -61,10 +78,16 @@ async def confirm(title: str, lines: list[str], prompt: str = "run? [y/N]: ",
     of whether a TUISession or a background workflow channel is active.
 
     Routing for the y/N read:
-    1. `workflow_bg` set → WorkflowTask.pause() → TUISession.pause().
-    2. Active TUISession → TUISession.pause() directly.
-    3. Plain terminal (no TUI) → stderr write + executor input().
+    1. Registered confirmer (Textual TUI approval modal) → owns the whole
+       interaction, including rendering the proposal; nothing is printed.
+    2. `workflow_bg` set → WorkflowTask.pause() → TUISession.pause().
+    3. Active TUISession → TUISession.pause() directly.
+    4. Plain terminal (no TUI) → stderr write + executor input().
     """
+    confirmer = get_confirmer()
+    if confirmer is not None:
+        return bool(await confirmer(title, list(lines), prompt))
+
     # Print the proposal block immediately to stdout so it's visible
     # before we block waiting for input.
     print(_format_block(title, lines), end="", flush=True)

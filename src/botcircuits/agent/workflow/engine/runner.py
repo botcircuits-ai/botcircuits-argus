@@ -2,7 +2,7 @@
 
 Once a workflow starts, the ENGINE owns the loop. The LLM is a
 subroutine the engine invokes per branch-delimited *segment* with a
-constant-size, cache-stable prompt (see `agent.core.Agent._run_segment`).
+constant-size, cache-stable prompt (see `agent.segments.SegmentRunner._run_segment`).
 The state machine — not the conversation history — is the memory.
 
 Contrast with `executor.run_flow` (the old LLM-driven path): there the
@@ -28,6 +28,9 @@ agent's existing tools / skills / MCP wiring.
 
 from __future__ import annotations
 
+import json
+import re
+import string
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Protocol
 from uuid import uuid4
@@ -193,6 +196,155 @@ def _data_variables(flow: dict) -> list[dict]:
         if isinstance(v, dict) and v.get("variableName") not in branch:
             out.append(v)
     return out
+
+
+def input_variables(flow: dict) -> list[dict]:
+    """Declared variables the USER must supply before the workflow can run —
+    marked `input: true` in `flow.variables`. Everything else is either
+    produced by the workflow or optional context. Unmarked workflows have no
+    pre-start collection (legacy behavior)."""
+    return [v for v in (flow.get("variables") or [])
+            if isinstance(v, dict) and v.get("input")]
+
+
+def _first_action_step_id(flow: dict) -> str | None:
+    """The first step (walking `next` from `start`) that carries an action —
+    the Tier-2 extractor uses its action text as context when resolving
+    initial inputs from the conversation."""
+    steps = flow.get("steps") or {}
+    sid = flow.get("start")
+    seen: set[str] = set()
+    while isinstance(sid, str) and sid in steps and sid not in seen:
+        seen.add(sid)
+        step = steps[sid]
+        if ((step.get("settings") or {}).get("action") or "").strip():
+            return sid
+        sid = step.get("next")
+    return None
+
+
+def _inputs_question(workflow_name: str, missing: list[dict]) -> str:
+    """The deterministic collection question for unfilled input variables —
+    built from the authored descriptions, no LLM involved."""
+    lines = [f"To run {workflow_name}, please provide:"]
+    for v in missing:
+        name = v.get("variableName", "")
+        desc = str(v.get("description") or "").strip()
+        lines.append(f"- {name}" + (f" — {desc}" if desc else ""))
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Remembered inputs — offer last run's values, never reuse silently
+# ---------------------------------------------------------------------------
+
+#: Reserved slot key carrying an outstanding "reuse last run's values?"
+#: offer across the pause. Rides the same slots persistence both the native
+#: tool state and the CLI run-state file already have; stripped on
+#: consumption so it never leaks into summaries.
+PENDING_REUSE_KEY = "__pending_reuse__"
+
+
+def _last_inputs_path(workflow_name: str) -> Path:
+    # Lazy import: `local` imports this module, so a top-level import would
+    # be circular. Only the directory resolution is borrowed.
+    from botcircuits.agent.workflow.local import _resolve_workflows_dir
+
+    safe = Path(workflow_name).name or "workflow"
+    return _resolve_workflows_dir() / ".last_inputs" / f"{safe}.json"
+
+
+def load_last_inputs(workflow_name: str) -> dict:
+    """The input values the last COMPLETED run of this workflow used, or {}.
+    Best-effort: unreadable/corrupt files just mean nothing to offer."""
+    try:
+        data = json.loads(_last_inputs_path(workflow_name).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_last_inputs(workflow_name: str, values: dict) -> None:
+    """Persist a completed run's input values for the next run's reuse offer.
+    Best-effort: a storage hiccup must never fail the run itself."""
+    if not values:
+        return
+    try:
+        path = _last_inputs_path(workflow_name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(values), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _reuse_question(workflow_name: str, offer: dict) -> str:
+    lines = [f"I have these values from the last run of {workflow_name}:"]
+    for name, value in offer.items():
+        lines.append(f"- {name}: {value}")
+    lines.append("Reuse them? (yes / no / change <name> …)")
+    return "\n".join(lines)
+
+
+_REUSE_YES_RE = re.compile(
+    r"^\s*(y|yes|yeah|yep|yup|ok(?:ay)?|sure|fine|reuse(?:\s+\w+)*|"
+    r"use(?:\s+(?:them|it|those|these))?|yes[,.\s]+use(?:\s+\w+)*|"
+    r"go ahead|proceed)\s*[.!]*\s*$", re.IGNORECASE)
+_REUSE_NO_RE = re.compile(r"^\s*(n|no|nope|none|don'?t|do not)\b", re.IGNORECASE)
+_CHANGE_WORDS = frozenset(
+    {"change", "changing", "update", "different", "new", "replace",
+     "modify", "edit"})
+
+
+def _variable_mention_tokens(spec: dict) -> set[str]:
+    """Tokens by which a user may refer to a variable: its name parts plus
+    its description words — "change pages" matches `research_depth` whose
+    description says "…in pages"."""
+    tokens: set[str] = set()
+    name = str(spec.get("variableName") or "")
+    tokens.add(name.lower())
+    tokens.update(p for p in name.lower().split("_") if len(p) > 2)
+    desc = str(spec.get("description") or "")
+    tokens.update(w.strip(string.punctuation).lower()
+                  for w in desc.split()
+                  if len(w.strip(string.punctuation)) > 3)
+    return tokens
+
+
+def interpret_reuse_reply(
+    reply: str,
+    offer: dict,
+    variables: list[dict],
+) -> tuple[dict, bool]:
+    """Deterministically interpret the user's answer to a reuse offer.
+
+    Returns `(accepted, consume_reply)`:
+      - "yes" / "yes use" / "ok" …      → (all offered values, True)
+      - "no" …                          → ({}, True)
+      - "i want to change <name>" …     → (offer minus the mentioned
+        variable(s), False — the reply may carry the new value, so it is
+        left for extraction)
+      - anything else (free-form input) → ({}, False — nothing remembered
+        is assumed; extraction consumes the reply as fresh values)
+
+    `consume_reply=True` means the reply was a pure decision word and must
+    NOT be fed to value extraction (a literal "yes" is not a topic).
+    """
+    text = (reply or "").strip()
+    if _REUSE_YES_RE.match(text):
+        return dict(offer), True
+    if _REUSE_NO_RE.match(text):
+        return {}, True
+
+    reply_tokens = {w.strip(string.punctuation).lower() for w in text.split()}
+    if reply_tokens & _CHANGE_WORDS:
+        specs = {v.get("variableName"): v for v in variables
+                 if v.get("variableName") in offer}
+        mentioned = {name for name, spec in specs.items()
+                     if _variable_mention_tokens(spec) & reply_tokens}
+        if mentioned:
+            kept = {k: v for k, v in offer.items() if k not in mentioned}
+            return kept, False
+    return {}, False
 
 
 def _eval_message(workflow_name: str, slots: dict) -> dict:
@@ -368,6 +520,70 @@ async def run_workflow_engine(
         one = resolve_tier0([v], slots, base_dir=_BASE_DIR())
         if one:
             slots.update(one)
+
+    # Initial input collection — deterministic, BEFORE the first segment.
+    # Variables marked `input: true` must be filled before the workflow can
+    # start: first try to resolve them from the conversation already at hand
+    # (the trigger args / `__last_user_message__`, via the same Tier-0/Tier-2
+    # hook branches use); whatever is still missing pauses the run with ONE
+    # authored-description question. Without this, the first segment's model
+    # improvises its own `human_feedback` ask and the user's answer never
+    # lands in the slots — the re-ask loop. `start_step_id` set means we're
+    # resuming mid-flow, where inputs were already settled.
+    inputs = input_variables(flow)
+    if start_step_id is None and inputs:
+        # An outstanding reuse offer from the previous pause? Interpret the
+        # user's answer deterministically (yes / no / change <name> /
+        # free-form new values) before anything else.
+        pending_offer = slots.pop(PENDING_REUSE_KEY, None)
+        if isinstance(pending_offer, dict) and pending_offer:
+            reply = str(slots.get("__last_user_message__") or "")
+            accepted, consume_reply = interpret_reuse_reply(
+                reply, pending_offer, inputs)
+            for k, v in accepted.items():
+                if slots.get(k) in (None, ""):
+                    slots[k] = v
+            if consume_reply:
+                # A pure decision word ("yes"/"no") must not reach value
+                # extraction — a literal "yes" is not a topic.
+                slots.pop("__last_user_message__", None)
+
+        missing = _unfilled(inputs, slots)
+        if missing and resolve_unfilled is not None:
+            backfilled = await resolve_unfilled(
+                flow=flow,
+                step_id=_first_action_step_id(flow) or flow.get("start"),
+                variables=missing,
+                slots=slots,
+            )
+            for k, v in (backfilled or {}).items():
+                if v not in (None, ""):
+                    slots[k] = v
+            missing = _unfilled(inputs, slots)
+        if missing:
+            # Values remembered from the last completed run are an OFFER,
+            # never a silent reuse — and offered at most once per run.
+            if pending_offer is None:
+                remembered = load_last_inputs(workflow_name)
+                offer = {
+                    v["variableName"]: remembered[v["variableName"]]
+                    for v in missing
+                    if remembered.get(v.get("variableName")) not in (None, "")
+                }
+                if offer:
+                    slots[PENDING_REUSE_KEY] = offer
+                    return EngineResult(
+                        paused=True,
+                        question=_reuse_question(workflow_name, offer),
+                        paused_step=None,
+                        slots=slots,
+                    )
+            return EngineResult(
+                paused=True,
+                question=_inputs_question(workflow_name, missing),
+                paused_step=None,  # resume restarts collection, then the flow
+                slots=slots,
+            )
 
     # Pick the starting segment: the one whose head is the requested start
     # step, else the first segment (graph entry).
@@ -629,6 +845,14 @@ async def run_workflow_engine(
     # `flow.result`), so the model never spends output tokens emitting it. Falls
     # back to the legacy outcome+slots line when no result is declared or it
     # can't be rendered.
+    # Remember this run's input values so the NEXT run can offer them for
+    # reuse (with the user's consent — see the pre-start collection stage).
+    save_last_inputs(workflow_name, {
+        v["variableName"]: slots[v["variableName"]]
+        for v in input_variables(flow)
+        if slots.get(v.get("variableName")) not in (None, "")
+    })
+
     rendered = render_result(flow, slots, base_dir=_BASE_DIR())
     if rendered is not None:
         # Optionally persist the engine-rendered answer to a file so out-of-

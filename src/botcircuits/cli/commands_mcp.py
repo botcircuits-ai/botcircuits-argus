@@ -16,8 +16,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
-import sys
 
 from botcircuits.agent.mcp import LocalMCPManager, MCPServer
 from botcircuits.cli.ansi import C, out

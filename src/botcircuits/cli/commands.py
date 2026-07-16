@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import uuid
 from typing import TYPE_CHECKING, Any, Optional
 
 from botcircuits.agent.tools import register_builtin
@@ -15,7 +14,6 @@ from botcircuits.agent.workflow.cli_commands import (
     locate_workflow_for_edit,
     parse_workflow_command,
 )
-from botcircuits.types import Message
 from botcircuits.cli.ansi import C, out
 from botcircuits.cli.config import CLIConfig
 
@@ -50,6 +48,7 @@ class CLIState:
 
 def print_help() -> None:
     out(C.dim("commands:"))
+    out(C.dim("  /plan <task>          plan a task into steps and run them with checkpoints"))
     out(C.dim("  /reset                drop current session"))
     out(C.dim("  /session [id]         show or switch session id"))
     out(C.dim("  /system <text>        set system prompt (effective on /reset)"))
@@ -124,12 +123,38 @@ async def handle_slash(
         out(C.dim("(session reset)"))
         return True, None
 
+    if head == "/plan":
+        if not rest:
+            out(C.dim("usage: /plan <task>"))
+            return True, None
+        # Orchestration: plan the task into steps, run them in order through
+        # a fresh worker agent (checkpoints + retry), print plan + results.
+        from botcircuits.agent import Orchestrator
+        orch = Orchestrator(provider=agent.provider, tools=agent.tools,
+                            max_tokens=agent.max_tokens)
+        result = await orch.run(rest.strip())
+        out(C.bold("plan:"))
+        for i, step in enumerate(result.plan, 1):
+            out(f"  {i}. {step}")
+        out(C.bold("results:"))
+        for i, (step, res) in enumerate(zip(result.plan, result.results), 1):
+            out(f"  {i}. {step}")
+            out(C.dim(f"     → {res}"))
+        return True, None
+
     if head == "/session":
         if rest:
             state.session_id = rest.strip()
             out(C.dim(f"(session set to {state.session_id})"))
         else:
             out(C.dim(f"session_id = {state.session_id or '(none yet)'}"))
+            # Saved sessions (durable store) — resumable via /session <id>.
+            from botcircuits.agent import list_saved_sessions
+            saved = list_saved_sessions()
+            if saved:
+                out(C.dim("saved sessions (most recent first):"))
+                for s in saved[:10]:
+                    out(C.dim(f"  {s['name']}  ({s['messages']} messages)"))
         return True, None
 
     if head == "/system":

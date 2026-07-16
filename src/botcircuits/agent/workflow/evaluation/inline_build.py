@@ -27,7 +27,6 @@ from __future__ import annotations
 import contextlib
 import json
 import re
-from pathlib import Path
 
 from botcircuits.providers.base import LLMProvider
 from botcircuits.types import Message

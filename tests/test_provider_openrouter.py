@@ -9,7 +9,6 @@ and the `make_provider` dispatch, not the inherited complete()/stream() logic
 
 from __future__ import annotations
 
-import os
 
 from botcircuits.providers import make_provider
 from botcircuits.providers.openrouter import OPENROUTER_BASE_URL, OpenRouterProvider

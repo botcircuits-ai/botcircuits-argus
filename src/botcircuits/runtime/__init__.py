@@ -15,8 +15,9 @@ state machine and calls back out for exactly two capabilities —
 An `AgentRuntimeProvider` packages those two capabilities behind one
 interface so the engine doesn't care WHERE the intelligence comes from:
 
-  - `native`      — the in-process BotCircuits agent loop (`agent.core.Agent`).
-                    Kept as the default fallback; zero behavior change.
+  - `native`      — the in-process BotCircuits agent loop (`agent.loop.Agent`),
+                    which hands the engine its callbacks directly (no
+                    provider class needed). Kept as the default fallback.
   - `claude-code` — shell out to the host `claude` CLI headlessly, one
                     process per segment, capturing JSON on stdout. No SDK
                     binding; the host's own tools/MCP do the real work.

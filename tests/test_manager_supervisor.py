@@ -50,8 +50,6 @@ def fake_spawn(monkeypatch):
 
 
 def test_start_launches_both_and_writes_state(env, fake_spawn):
-    alive: set[int] = set()
-    # _pid_alive: nothing alive before start, everything alive after.
     import botcircuits.manager.supervisor as s
 
     state = s.start()

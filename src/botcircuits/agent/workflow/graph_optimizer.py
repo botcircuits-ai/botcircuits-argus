@@ -33,7 +33,6 @@ action text) and `compute_segments` (which reads the final graph).
 
 from __future__ import annotations
 
-from typing import Any
 
 # Heuristic markers that a terminal step's action is a pure emit/restatement of
 # something a prior step already produced — not new work. Deliberately narrow:

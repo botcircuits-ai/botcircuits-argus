@@ -45,7 +45,6 @@ def print_banner(
 
     try:
         from rich.console import Console
-        from rich.columns import Columns
         from rich.panel import Panel
         from rich.text import Text
         from rich.table import Table

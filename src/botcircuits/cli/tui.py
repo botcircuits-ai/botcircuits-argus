@@ -50,10 +50,6 @@ def _make_key_bindings() -> KeyBindings:
     return kb
 
 
-# Sentinel returned by read_message() on EOF.
-_EOF = None
-
-
 class TUISession:
     """Manages the prompt-toolkit session and background task lifecycle."""
 
@@ -136,18 +132,34 @@ class TUISession:
             return "\n".join(lines)
         return first
 
-    async def _read_one_line(self) -> Optional[str]:
-        """Read one line with the active prompt (pause or normal)."""
-        prompt_text = self._current_prompt
+    def _prompt_text(self) -> str:
+        """The prompt to render RIGHT NOW — pause question or normal prompt.
+
+        Evaluated lazily on every prompt redraw (see `_read_pt`), so a pause
+        that arrives while `prompt_async` is already pending changes the
+        visible prompt in place instead of being invisible until the next
+        `read_message()` cycle."""
         if self._active_pause is not None:
             question, _ = self._active_pause
-            prompt_text = (
+            return (
                 C.bold(C.cyan("argus> ")) + question + "\n"
                 + C.bold(C.green("you> "))
             )
+        return self._current_prompt
+
+    def _invalidate_prompt(self) -> None:
+        """Force the pending prompt (if any) to redraw with `_prompt_text()`."""
+        if self._session is None:
+            return
+        app = self._session.app
+        if app is not None and app.is_running:
+            app.invalidate()
+
+    async def _read_one_line(self) -> Optional[str]:
+        """Read one line with the active prompt (pause or normal)."""
         if self._session is not None:
-            return await self._read_pt(prompt_text)
-        return await self._read_stdin(prompt_text)
+            return await self._read_pt(self._prompt_text)
+        return await self._read_stdin(self._prompt_text())
 
     async def _read_continuation(self) -> Optional[str]:
         """Read a continuation line for multi-line `\"\"\"` blocks."""
@@ -156,7 +168,7 @@ class TUISession:
             return await self._read_pt(cont)
         return await self._read_stdin(cont)
 
-    async def _read_pt(self, prompt_text: str) -> Optional[str]:
+    async def _read_pt(self, prompt_text) -> Optional[str]:
         """Read via prompt_toolkit's asyncio-native prompt.
 
         Must use `prompt_async`, NOT `prompt()` in a thread executor — the
@@ -164,9 +176,18 @@ class TUISession:
         fights the real asyncio loop for the terminal and freezes/garbles
         output from background tasks running concurrently under
         `patch_stdout`. `prompt_async` runs cooperatively on this loop.
+
+        `prompt_text` may be a str or a zero-arg callable returning str; the
+        callable form is re-evaluated on every redraw, which is what lets a
+        mid-prompt pause (`pause()` + `_invalidate_prompt()`) surface its
+        question without restarting the prompt.
         """
+        if callable(prompt_text):
+            message = lambda: ANSI(prompt_text())  # noqa: E731 - re-evaluated per redraw
+        else:
+            message = ANSI(prompt_text)
         try:
-            raw = await self._session.prompt_async(ANSI(prompt_text))  # type: ignore[union-attr]
+            raw = await self._session.prompt_async(message)  # type: ignore[union-attr]
             return raw
         except EOFError:
             return None
@@ -207,6 +228,10 @@ class TUISession:
         self._current_prompt = self._normal_prompt
         if not fut.done():
             fut.set_result(msg)
+        # Surface the next queued pause (if any) right away so its question
+        # replaces the prompt without waiting for another input cycle.
+        await self._maybe_activate_next_pause()
+        self._invalidate_prompt()
         return True
 
     async def _maybe_activate_next_pause(self) -> None:
@@ -253,12 +278,19 @@ class TUISession:
         """Block the calling coroutine until the user answers *question*.
 
         Called from inside a background task (tool handler, workflow engine).
-        Puts the question on the pause queue; the main loop picks it up on the
-        next `read_message()` call and routes the reply back here.
+        When no other pause is active, the question becomes the visible
+        prompt IMMEDIATELY — the pending `prompt_async` is invalidated so it
+        redraws with the question (this is what makes a y/N confirmation
+        visible while the user is sitting at the normal prompt). Concurrent
+        pauses queue behind the active one and surface as each is answered.
         """
         loop = asyncio.get_event_loop()
         fut: asyncio.Future[str] = loop.create_future()
-        await self._pause_queue.put((question, fut))
+        if self._active_pause is None:
+            self._active_pause = (question, fut)
+            self._invalidate_prompt()
+        else:
+            await self._pause_queue.put((question, fut))
         # Yield so the main loop can see the pause before we block.
         await asyncio.sleep(0)
         return await fut

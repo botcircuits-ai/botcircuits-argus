@@ -24,7 +24,7 @@ import functools
 
 from deepeval.tracing import observe, update_current_span
 
-from botcircuits.agent.core import Agent
+from botcircuits.agent.loop import Agent
 from botcircuits.agent.tools.registry import ToolRegistry
 
 _PATCHED = False

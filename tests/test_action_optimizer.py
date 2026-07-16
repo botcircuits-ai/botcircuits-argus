@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
 
 from botcircuits.agent.workflow import action_optimizer as ao
 

@@ -44,7 +44,8 @@ import sys
 from typing import Optional
 
 from botcircuits.agent import (
-    Agent, default_registry, register_workflows, collect_agents_config,
+    Agent, DurableConversationStore, default_registry, register_workflows,
+    collect_agents_config,
 )
 from botcircuits.agent.workflow import LocalWorkflowError
 from botcircuits.providers import AnthropicProvider, GeminiProvider, OpenAIProvider, OpenRouterProvider
@@ -94,7 +95,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Override the provider's default model")
     p.add_argument("--system", default=None, help="System prompt")
     p.add_argument("--session", default=None,
-                   help="Resume an existing session id (only useful inside one CLI run)")
+                   help="Resume a session id (persisted under .botcircuits/sessions, "
+                        "so it survives across CLI runs)")
+    p.add_argument("--tui", action="store_true", default=False,
+                   help="Full-screen Textual UI: conversation + activity panes, "
+                        "approval gates as modals (needs the 'tui' extra)")
 
     # Three-way streaming flag: --stream / --no-stream / unset.
     stream_group = p.add_mutually_exclusive_group()
@@ -262,6 +267,14 @@ async def amain(args: argparse.Namespace) -> int:
         if interactive and registered:
             note = "" if normalize_enabled else " (normalize=off)"
             out(C.dim(f"workflows: {', '.join(registered)}{note}"))
+        if registered:
+            # Advertise the registered workflows in the system prompt with a
+            # deterministic invocation rule — without it, smaller models
+            # treat "run <name> workflow" as an open-ended request and ask
+            # clarifying questions instead of calling the tool.
+            from botcircuits.agent.workflow import workflows_system_prompt
+            cfg.system = (cfg.system or "") + workflows_system_prompt(registered)
+            state.system = cfg.system
         if skipped:
             out(C.yellow(
                 f"[workflow] skipped (name collides with built-in tool): "
@@ -284,7 +297,21 @@ async def amain(args: argparse.Namespace) -> int:
         max_steps=cfg.max_steps,
         mode=cfg.mode,
         agents_config=agents_config,
+        # Durable sessions: persisted as JSON-L under .botcircuits/sessions
+        # after every turn, so `--session <id>` / `/session <id>` resumes
+        # across CLI runs and `search_memory` can recall past conversations.
+        store=DurableConversationStore(),
     ) as agent:
+
+        # Full-screen Textual UI (--tui): same agent, same tools, but the
+        # approval gate is a modal and pauses land in the conversation pane.
+        if getattr(args, "tui", False) and interactive:
+            from botcircuits.cli.tui_app import run_tui, run_tui_available
+            missing = run_tui_available()
+            if missing:
+                out(C.red(f"[tui] {missing}"))
+                return 2
+            return await run_tui(agent, provider, state)
 
         if interactive:
             from botcircuits.cli.banner import print_banner

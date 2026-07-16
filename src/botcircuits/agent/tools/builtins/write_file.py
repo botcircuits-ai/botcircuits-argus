@@ -49,7 +49,7 @@ def write_file_tool(
             f"path:    {path}",
             f"size:    {size} bytes",
             f"action:  {'overwrite' if existed else 'create'}",
-            f"preview:",
+            "preview:",
             *[f"  {ln}" for ln in preview.splitlines()],
         ]
         if preapproved:

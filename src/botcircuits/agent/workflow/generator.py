@@ -52,7 +52,10 @@ def _prompt(instructions: str, name: str, resources: str = "") -> str:
         '    "start": "<first step id>",',
         '    "variables": [',
         '      { "variableName": "<snake_case>", "description": "<plain '
-        'language; state the exact value words if it is a fixed set>" }',
+        'language; state the exact value words if it is a fixed set>", '
+        '"input": "<true ONLY for values the USER must supply to start '
+        '(the topic, the id, …); omit for variables the workflow produces '
+        'or reads from files>" }',
         "    ],",
         '    "steps": {',
         '      "<step_id>": {',
@@ -90,6 +93,11 @@ def _prompt(instructions: str, name: str, resources: str = "") -> str:
         "that is in a file. A `question` PAUSES the whole workflow waiting on a "
         "human and is almost always wrong here. Use `question` ONLY when the "
         "instructions explicitly require asking a person something no file holds.",
+        "- Mark variables the USER must supply to start (and only those) with "
+        '`"input": true`. The ENGINE collects them deterministically before the '
+        "first step: it extracts values already present in the conversation and "
+        "asks ONE question (built from your descriptions) for the rest — so "
+        "never author a step that asks for them.",
         "- When a fact is a deterministic lookup (a value in a file, membership "
         "in a list, a number in a range), give its variable a `resolver` so the "
         "ENGINE computes it with NO AI call:",

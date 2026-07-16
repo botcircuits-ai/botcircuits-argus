@@ -3,7 +3,10 @@
 Modeled after Hermes Agent's persistent memory feature
 (https://hermes-agent.nousresearch.com/docs/user-guide/features/memory).
 
-Two flat files under `~/.botcircuits/memories/`:
+Two flat files under `.botcircuits/memories/` — project-local when the
+working directory has a `.botcircuits/` folder (each project keeps its own
+notes, same resolution as sessions/workflows/settings), else the global
+`~/.botcircuits/memories/`:
 
   - MEMORY.md  agent's notes about environment, conventions, lessons learned.
                Cap: 2200 chars (~800 tokens).
@@ -73,12 +76,23 @@ Target = Literal["memory", "user"]
 def memory_dir() -> Path:
     """Resolve the on-disk directory for memory files.
 
-    Honors `BOTCIRCUITS_MEMORY_DIR` for tests and non-default deployments;
-    otherwise uses `~/.botcircuits/memories/`.
+    Resolution order (mirrors sessions/workflows/settings):
+    1. `BOTCIRCUITS_MEMORY_DIR` — tests and non-default deployments.
+    2. `<cwd>/.botcircuits/memories/` — when the project has a local
+       `.botcircuits/` folder, its memory lives WITH the project, so
+       different projects keep separate notes.
+    3. `~/.botcircuits/memories/` — global fallback for cwds without a
+       project `.botcircuits/`.
+
+    Resolved on every call (not cached) so an agent started in one
+    project and another started elsewhere each hit the right store.
     """
     override = os.getenv(MEMORY_DIR_ENV)
     if override:
         return Path(override).expanduser()
+    local = Path.cwd() / DEFAULT_MEMORY_DIRNAME
+    if local.parent.is_dir():  # project has a .botcircuits/ folder
+        return local
     return Path.home() / DEFAULT_MEMORY_DIRNAME
 
 
