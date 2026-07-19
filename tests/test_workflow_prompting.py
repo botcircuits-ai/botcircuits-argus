@@ -89,8 +89,33 @@ def test_trigger_ignores_questions_and_non_run_text():
     assert match_workflow_trigger("what does ai_trends do", names) is None
     assert match_workflow_trigger("tell me about ai_trends", names) is None
     assert match_workflow_trigger("run the tests", names) is None
-    # substring of another word must not match
+    # substring of another SLUG token must not match ("ai_trends" ⊂
+    # "ai_trends_v2" only as a prefix — a different workflow).
     assert match_workflow_trigger("run ai_trends_v2", names) is None
+
+
+def test_trigger_matches_the_name_as_spoken():
+    """The name routes whether written as the exact slug OR spelled out with
+    spaces/hyphens and even a per-word typo — otherwise a natural phrasing
+    silently falls through to the model, which then skips the deterministic
+    inputs/options flow. (Regression: "run deep research assistance".)"""
+    names = ["deep_research_assistant"]
+    for msg in ("run deep_research_assistant",
+                "run deep research assistant",
+                "run deep-research-assistant",
+                "run deep research assistance",   # "assistance" ≈ "assistant"
+                "run deep researh assistnat"):    # two typos
+        assert match_workflow_trigger(msg, names) == "deep_research_assistant", msg
+
+
+def test_spoken_and_slug_forms_route_the_same_longest_name():
+    names = ["order_fulfillment", "order_fulfillment_eu"]
+    assert match_workflow_trigger("run order_fulfillment_eu", names) == \
+        "order_fulfillment_eu"
+    assert match_workflow_trigger("run order fulfillment eu", names) == \
+        "order_fulfillment_eu"
+    assert match_workflow_trigger("run order fulfillment", names) == \
+        "order_fulfillment"
 
 
 # -- model-issued trigger args can't poison produced variables -----------------
@@ -157,6 +182,28 @@ def test_strip_keeps_the_actual_input():
         "deep_research_assistant")
     assert "AI in finance" in out and "3 pages" in out
     assert "deep_research_assistant" not in out
+
+
+def test_strip_tolerates_spaces_hyphens_and_typos():
+    """The name is matched as spoken, not just as the exact slug — including
+    per-word typos ("researh assistnat"). A typo'd bare trigger must strip
+    to "" or extraction turns the command into a topic."""
+    name = "deep_research_assistant"
+    assert strip_workflow_trigger("run deep research assistant", name) == ""
+    assert strip_workflow_trigger("run deep-research-assistant", name) == ""
+    assert strip_workflow_trigger("run deep researh assistnat", name) == ""
+    out = strip_workflow_trigger(
+        "run deep researh assistnat on AI in finance, 3 pages", name)
+    assert "AI in finance" in out and "researh" not in out
+
+
+def test_strip_never_eats_topic_words_shared_with_the_name():
+    """Name words are only removed as a contiguous sequence — a topic that
+    shares a word with the workflow name survives."""
+    out = strip_workflow_trigger(
+        "run deep_research_assistant about deep learning",
+        "deep_research_assistant")
+    assert "about deep learning" in out
 
 
 def test_triggered_workflow_receives_stripped_context():

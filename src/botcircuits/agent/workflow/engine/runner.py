@@ -97,6 +97,11 @@ class EngineResult:
     paused: bool = False
     summary: str = ""
     question: str = ""
+    #: Predefined answers for `question`, when it has a fixed choice set
+    #: (e.g. the reuse offer's yes/no/change). The UI renders these as a
+    #: selector; a pick comes back verbatim so the deterministic reply
+    #: interpreters match without an LLM. Empty for free-form questions.
+    options: list[str] = field(default_factory=list)
     #: Segment head to resume from after a user-interaction pause.
     paused_step: str | None = None
     #: Tool name(s) a permission-style pause needs (propagated from the
@@ -244,6 +249,14 @@ def _inputs_question(workflow_name: str, missing: list[dict]) -> str:
 #: consumption so it never leaks into summaries.
 PENDING_REUSE_KEY = "__pending_reuse__"
 
+#: Marker slot set the moment a reuse offer is shown. The offer must be
+#: made at most once per RUN, and a run can span several engine calls
+#: (offer → "change depth" → ask depth → reply …): `PENDING_REUSE_KEY`
+#: is consumed on the first re-entry, so it alone can't suppress a
+#: re-offer on the later ones. Rides slots persistence; stripped with the
+#: other `__` keys before anything user-facing.
+REUSE_OFFERED_KEY = "__reuse_offered__"
+
 
 def _last_inputs_path(workflow_name: str) -> Path:
     # Lazy import: `local` imports this module, so a top-level import would
@@ -285,10 +298,24 @@ def _reuse_question(workflow_name: str, offer: dict) -> str:
     return "\n".join(lines)
 
 
+def _reuse_options(offer: dict) -> list[str]:
+    """Selector entries for a reuse offer. Each is a canonical reply
+    `interpret_reuse_reply` resolves deterministically."""
+    return ["yes", "no"] + [f"change {name}" for name in offer]
+
+
+#: "do (the) same (as before/last time/last run)" — with or without a
+#: leading yes-word: "yes do same", "same as last time", "do the same".
+_SAME_PHRASE = (
+    r"(?:do\s+)?(?:the\s+)?same(?:\s+(?:again|values?|ones?|thing|"
+    r"as\s+(?:before|last(?:\s+(?:time|run))?)))*"
+)
 _REUSE_YES_RE = re.compile(
     r"^\s*(y|yes|yeah|yep|yup|ok(?:ay)?|sure|fine|reuse(?:\s+\w+)*|"
     r"use(?:\s+(?:them|it|those|these))?|yes[,.\s]+use(?:\s+\w+)*|"
-    r"go ahead|proceed)\s*[.!]*\s*$", re.IGNORECASE)
+    r"go ahead|proceed|"
+    r"(?:(?:y|yes|yeah|yep|yup|ok(?:ay)?|sure)[,.\s]+)?" + _SAME_PHRASE +
+    r")\s*[.!,]*\s*$", re.IGNORECASE)
 _REUSE_NO_RE = re.compile(r"^\s*(n|no|nope|none|don'?t|do not)\b", re.IGNORECASE)
 _CHANGE_WORDS = frozenset(
     {"change", "changing", "update", "different", "new", "replace",
@@ -460,6 +487,7 @@ async def run_workflow_engine(
     start_step_id: str | None = None,
     slots: dict[str, Any] | None = None,
     resolve_unfilled: Callable[..., Awaitable[dict]] | None = None,
+    interpret_reply: Callable[..., Awaitable[str | None]] | None = None,
     event_sink: Callable[[str, Any], Awaitable[None]] | None = None,
 ) -> EngineResult:
     """Drive `flow` segment-by-segment until it ends or pauses for the user.
@@ -475,6 +503,13 @@ async def run_workflow_engine(
     (deterministic resolver first, cheap-model extraction last). When a
     branch variable is STILL empty after this, the engine routes to a
     clarification question instead of silently taking the default branch.
+
+    `interpret_reply` is the optional LLM fallback for option questions:
+    called with `(question, options, reply)` when the user's typed answer
+    to a predefined-options pause (currently the reuse offer) isn't
+    understood deterministically. It returns the matching option verbatim,
+    or None when the reply is genuinely free-form (fresh values) — which
+    then flows to slot extraction as before.
 
     `event_sink`, when given, is an async `(kind, payload)` callable (same shape
     the segment sink uses) that surfaces the engine's OWN deterministic tool
@@ -540,6 +575,26 @@ async def run_workflow_engine(
             reply = str(slots.get("__last_user_message__") or "")
             accepted, consume_reply = interpret_reuse_reply(
                 reply, pending_offer, inputs)
+            if (not accepted and not consume_reply and reply.strip()
+                    and interpret_reply is not None):
+                # Deterministic interpretation fell through — before letting
+                # extraction treat the reply as fresh values (a decision
+                # phrase is not a topic), ask the LLM whether it actually
+                # picks one of the offered answers.
+                try:
+                    choice = await interpret_reply(
+                        question=_reuse_question(workflow_name, pending_offer),
+                        options=_reuse_options(pending_offer),
+                        reply=reply,
+                    )
+                except Exception:
+                    choice = None
+                if choice:
+                    accepted, consume_reply = interpret_reuse_reply(
+                        str(choice), pending_offer, inputs)
+                    # The original reply may still carry the new value for a
+                    # "change <name>" pick, so it is only consumed on a pure
+                    # yes/no decision (interpret_reuse_reply signals that).
             for k, v in accepted.items():
                 if slots.get(k) in (None, ""):
                     slots[k] = v
@@ -563,7 +618,7 @@ async def run_workflow_engine(
         if missing:
             # Values remembered from the last completed run are an OFFER,
             # never a silent reuse — and offered at most once per run.
-            if pending_offer is None:
+            if pending_offer is None and not slots.get(REUSE_OFFERED_KEY):
                 remembered = load_last_inputs(workflow_name)
                 offer = {
                     v["variableName"]: remembered[v["variableName"]]
@@ -572,9 +627,11 @@ async def run_workflow_engine(
                 }
                 if offer:
                     slots[PENDING_REUSE_KEY] = offer
+                    slots[REUSE_OFFERED_KEY] = True
                     return EngineResult(
                         paused=True,
                         question=_reuse_question(workflow_name, offer),
+                        options=_reuse_options(offer),
                         paused_step=None,
                         slots=slots,
                     )

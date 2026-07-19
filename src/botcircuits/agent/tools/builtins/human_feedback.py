@@ -37,20 +37,40 @@ def human_feedback_tool() -> LocalTool:
         question = (args or {}).get("question") or ""
         question = question.strip() if isinstance(question, str) else str(question)
 
+        # Predefined answers, shown as a selector in the TUI. Two sources:
+        # the model passing them explicitly (a question step with authored
+        # choices), or an option set the engine parked when its paused
+        # question left as plain tool-result text — the model relays the
+        # question but can't be trusted to relay a structured list.
+        from botcircuits.agent.option_select import take_options
+
+        raw = (args or {}).get("options")
+        options = [str(o) for o in raw if str(o).strip()] \
+            if isinstance(raw, list) else []
+        default_index = 0
+        if not options:
+            parked = take_options(question)
+            if parked is not None:
+                options = parked.options
+                default_index = parked.default_index
+
         # Background mode: block the bg task on the channel and await the
         # user's reply.  The reply is returned so the segment can record it
         # as the answer to this question step without needing another
         # provider round-trip.
         wt = (context or {}).get("_workflow_bg")
         if wt is not None:
-            answer = await wt.pause(question)
+            answer = await wt.pause(question, options or None, default_index)
             # Return the answer directly so the engine can slot it in.
             # The "paused" flag is intentionally absent — we are NOT
             # pausing the agent loop; we only paused the bg coroutine.
             return {"answer": answer, "question": question}
 
         # Foreground (normal) mode: echo back so the loop pauses the turn.
-        return {"paused": True, "question": question}
+        out = {"paused": True, "question": question}
+        if options:
+            out["options"] = options
+        return out
 
     return LocalTool(
         name=HUMAN_FEEDBACK_TOOL,
@@ -69,6 +89,17 @@ def human_feedback_tool() -> LocalTool:
                 "question": {
                     "type": "string",
                     "description": "The question to show the user verbatim.",
+                },
+                "options": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Predefined answers, when the question has a fixed "
+                        "choice set (e.g. a workflow step's authored choices "
+                        "or options listed in a tool result). Shown as a "
+                        "selector; the user can still answer free-form. Pass "
+                        "each option verbatim."
+                    ),
                 },
             },
             "required": ["question"],

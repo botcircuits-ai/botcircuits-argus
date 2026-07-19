@@ -52,28 +52,55 @@ class WorkflowTask:
     # Channel API used by the human_feedback bridge inside the engine
     # ------------------------------------------------------------------
 
-    async def pause(self, question: str) -> str:
+    async def pause(
+        self,
+        question: str,
+        options: list[str] | None = None,
+        default_index: int = 0,
+    ) -> str:
         """Block the background coroutine until the user replies.
 
         Delegates to the active TUISession so all pause requests (workflow
         human_feedback, plan_and_confirm, permission gates) go through a
         single channel — the input prompt at the bottom of the terminal.
+        `options`, when given, render as a selector there (see
+        `TUISession.pause`); a pick returns the option text verbatim, free
+        typing passes through for semantic resolution by the caller.
 
         Falls back to the legacy dual-queue approach when no TUI session is
-        active (e.g. non-interactive / piped mode).
+        active (e.g. non-interactive / piped mode) — options become a
+        numbered list and a digit reply maps back to the option text.
         """
+        from botcircuits.agent.option_select import (
+            OTHER_LABEL,
+            is_other_reply,
+            map_option_reply,
+        )
         from botcircuits.cli.tui import get_tui_session
         tui = get_tui_session()
         if tui is not None:
-            return await tui.pause(question)
+            try:
+                return await tui.pause(question, options, default_index)
+            except TypeError:
+                # Adapter (e.g. Textual _PauseAdapter) with the old
+                # single-arg signature.
+                return map_option_reply(await tui.pause(question), options)
         # Legacy fallback for non-TUI (piped) mode: print question, read reply.
         loop = asyncio.get_event_loop()
         from botcircuits.cli.ansi import C, out
         out(C.bold(C.cyan("argus> ")) + question)
+        if options:
+            for i, opt in enumerate(list(options) + [OTHER_LABEL]):
+                out(C.dim(f"  {i + 1}. {opt}"))
         reply: str = await loop.run_in_executor(
             None, lambda: input(C.bold(C.green("you> ")))
         )
-        return reply
+        if is_other_reply(reply, options):
+            # "Other" picked: the next typed line is the raw answer.
+            return await loop.run_in_executor(
+                None, lambda: input(C.bold(C.green("you> ")))
+            )
+        return map_option_reply(reply, options)
 
     def context_extras(self) -> dict:
         """A dict to merge into a tool's `context` arg so `human_feedback`

@@ -443,6 +443,10 @@ async def _run(
         out: dict[str, Any] = {
             "status": "paused", "question": result.question, "name": name,
         }
+        if result.options:
+            # Predefined answers for the question — hosts with a UI can
+            # render them as a selector; --reply accepts them verbatim.
+            out["options"] = list(result.options)
         if usage_dict:
             out["usage"] = usage_dict
         return out

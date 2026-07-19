@@ -526,10 +526,11 @@ async def _noop_segment(**kw):
     return SegmentResult(text="ok", captured_slots={})
 
 
-def _run(flow, slots=None, resolve=None):
+def _run(flow, slots=None, resolve=None, interpret=None):
     return asyncio.run(run_workflow_engine(
         flow, workflow_name="wf", run_segment=_noop_segment,
         slots=slots or {}, resolve_unfilled=resolve,
+        interpret_reply=interpret,
     ))
 
 
@@ -617,6 +618,65 @@ def test_reuse_reply_free_form_is_treated_as_fresh_input(tmp_path, monkeypatch):
                           "__last_user_message__": "Robotics, 2 pages"})
     assert resumed.done
     assert resumed.slots["topic"] == "Robotics"   # remembered NOT adopted
+
+
+def test_reuse_reply_same_family_adopts_all(tmp_path, monkeypatch):
+    """"yes do same," and friends are acceptance, not a topic (the phrase
+    that once got researched verbatim)."""
+    _remember(tmp_path, monkeypatch, {"topic": "AI", "depth": "3 pages"})
+    for reply in ("yes do same,", "do the same", "same as last time",
+                  "same", "ok same", "yes do same as last run"):
+        first = _run(_input_flow())
+        resumed = _run(_input_flow(),
+                       slots={**first.slots, "__last_user_message__": reply})
+        assert resumed.done, f"reply {reply!r} did not adopt the offer"
+        assert resumed.slots["topic"] == "AI"
+
+
+def test_reuse_pause_carries_selector_options(tmp_path, monkeypatch):
+    _remember(tmp_path, monkeypatch, {"topic": "AI", "depth": "3 pages"})
+    result = _run(_input_flow())
+    assert result.paused
+    assert result.options == ["yes", "no", "change topic", "change depth"]
+
+
+def test_unclear_reuse_reply_asks_the_llm_hook(tmp_path, monkeypatch):
+    """A typed reply the regexes don't understand goes to `interpret_reply`;
+    a "yes" classification adopts the offer and consumes the reply."""
+    _remember(tmp_path, monkeypatch, {"topic": "AI", "depth": "3 pages"})
+    seen = {}
+
+    async def interpret(*, question, options, reply):
+        seen.update(question=question, options=options, reply=reply)
+        return "yes"
+
+    first = _run(_input_flow())
+    resumed = _run(_input_flow(), interpret=interpret,
+                   slots={**first.slots,
+                          "__last_user_message__": "sounds good, run it again"})
+    assert resumed.done
+    assert resumed.slots["topic"] == "AI"
+    assert seen["reply"] == "sounds good, run it again"
+    assert seen["options"] == ["yes", "no", "change topic", "change depth"]
+
+
+def test_llm_hook_none_keeps_free_form_extraction(tmp_path, monkeypatch):
+    """When the hook says the reply is NOT picking an option, it stays
+    available to extraction as fresh values — remembered ones dropped."""
+    _remember(tmp_path, monkeypatch, {"topic": "AI", "depth": "3 pages"})
+
+    async def interpret(*, question, options, reply):
+        return None
+
+    async def resolve(*, flow, step_id, variables, slots):
+        return {"topic": "Robotics", "depth": "2 pages"}
+
+    first = _run(_input_flow())
+    resumed = _run(_input_flow(), interpret=interpret, resolve=resolve,
+                   slots={**first.slots,
+                          "__last_user_message__": "Robotics, 2 pages"})
+    assert resumed.done
+    assert resumed.slots["topic"] == "Robotics"
 
 
 def test_change_mention_matches_description_words():

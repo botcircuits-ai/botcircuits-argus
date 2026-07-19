@@ -91,6 +91,43 @@ def _branch_input_schema(branch_variables: list[dict]) -> dict:
     return {"type": "object", "properties": properties}
 
 
+#: How many input-collection pauses one tool call may answer interactively
+#: before parking the run (safety valve against an answer loop).
+_MAX_INPUT_PAUSES = 6
+
+
+def _tui_channel():
+    """The active CLI pause channel (TUISession), or None outside the CLI
+    (gateway, tests, evaluation harness)."""
+    try:
+        from botcircuits.cli.tui import get_tui_session
+    except ImportError:
+        return None
+    return get_tui_session()
+
+
+def _make_interpret_reply(provider):
+    """Build the engine's LLM fallback for option questions: given the
+    question, its predefined options, and a typed reply the deterministic
+    interpreters didn't understand, return the option the reply picks (or
+    None for genuinely free-form input). None provider → hook stays None
+    so the engine skips the fallback entirely."""
+    if provider is None:
+        return None
+
+    from botcircuits.agent.option_select import classify_option_reply
+
+    async def _interpret(*, question, options, reply):
+        try:
+            provider.usage_purpose = "option_reply_classification"
+        except Exception:
+            pass
+        return await classify_option_reply(
+            provider, question=question, options=options, reply=reply)
+
+    return _interpret
+
+
 def _make_resolve_unfilled(*, provider, normalize_enabled):
     """Build the Tier-0/Tier-2 backfill hook the engine runner calls when a
     branch variable is still empty after Tier-1 (`record_slots`) capture.
@@ -155,6 +192,7 @@ async def _run_engine(
     last_user_message: str = "",
     event_sink=None,
     runtime=None,
+    pause_channel=None,
 ) -> str:
     """Engine-driven execution: the runner owns the loop, calling
     `run_segment` (the agent's `_run_segment`) once per branch-delimited
@@ -195,6 +233,16 @@ async def _run_engine(
             k: v for k, v in (args or {}).items()
             if v not in (None, "") and (not allowed or k in allowed)
         })
+    # A FRESH trigger's message is command, not content: drop the trigger
+    # phrase (typo/variant-tolerant) before extraction sees it, so
+    # "run deep researh assistnat" can never become topic="deep researh
+    # assistnat". Only on fresh starts — a resume's message is the user's
+    # ANSWER and must reach extraction untouched. This guards the
+    # model-routed path too, which bypasses the loop's own strip.
+    if (last_user_message and resume_step is None
+            and state.get("session_id") is None):
+        last_user_message = strip_workflow_trigger(last_user_message, wf_name)
+
     # Reserved key the Tier-0 resolver reads as the freshest user context
     # (deterministic choice-value / typed extraction). Stripped from the
     # final slots before the summary so it never leaks into output.
@@ -204,6 +252,7 @@ async def _run_engine(
     # A runtime provider supplies its own segment runner + resolve hook; in
     # the native default we keep the passed-in callback and build the local
     # Tier-0/Tier-2 closure.
+    interpret_reply = None
     if runtime is not None:
         run_segment = lambda **kw: runtime.run_segment(event_sink=event_sink, **kw)
         resolve_unfilled = lambda **kw: runtime.resolve_slots(**kw)
@@ -211,6 +260,7 @@ async def _run_engine(
         resolve_unfilled = _make_resolve_unfilled(
             provider=provider, normalize_enabled=normalize_enabled,
         )
+        interpret_reply = _make_interpret_reply(provider)
     result = await run_workflow_engine(
         flow,
         workflow_name=wf_name,
@@ -218,8 +268,40 @@ async def _run_engine(
         start_step_id=resume_step,
         slots=slots,
         resolve_unfilled=resolve_unfilled,
+        interpret_reply=interpret_reply,
         event_sink=event_sink,
     )
+
+    # Input-collection pauses (the reuse offer, the initial inputs ask —
+    # recognizable by paused_step=None and no tool gate) are answered
+    # DIRECTLY on the CLI pause channel when one is available: the
+    # question and its selector options render deterministically and the
+    # reply re-enters the engine, with no model relay in between that
+    # could rephrase the question or drop the options. Segment pauses
+    # (human_feedback inside a step, permission gates) keep their existing
+    # routes. Capped so a channel that keeps answering emptily can't spin.
+    hops = 0
+    while (result.paused and result.paused_step is None
+           and not result.needs_tool and hops < _MAX_INPUT_PAUSES):
+        channel = pause_channel or _tui_channel()
+        if channel is None:
+            break
+        answer = await channel.pause(
+            result.question, result.options or None, 0)
+        hops += 1
+        slots = dict(result.slots)
+        if str(answer).strip():
+            slots["__last_user_message__"] = str(answer)
+        result = await run_workflow_engine(
+            flow,
+            workflow_name=wf_name,
+            run_segment=run_segment,
+            start_step_id=None,
+            slots=slots,
+            resolve_unfilled=resolve_unfilled,
+            interpret_reply=interpret_reply,
+            event_sink=event_sink,
+        )
 
     if result.paused:
         # Park: remember where to resume and what we've collected.
@@ -227,6 +309,13 @@ async def _run_engine(
         state["engine_slots"] = result.slots
         state["session_id"] = wf_name  # mark active for active_workflow_names
         state["finished_quietly"] = False
+        if result.options:
+            # No pause channel here — the question travels to the UI as
+            # plain text through the model's `human_feedback` relay; park
+            # the structured option set so the pause channel can render a
+            # selector if the model relays the question near-verbatim.
+            from botcircuits.agent.option_select import offer_options
+            offer_options(result.question, result.options)
         return result.question or "(workflow is waiting for your input)"
 
     # Completed — reset so the next request restarts cleanly.
@@ -315,6 +404,9 @@ def workflow_tool(
                 last_user_message=ctx.get("last_user_message", ""),
                 event_sink=ctx.get("event_sink"),
                 runtime=runtime,
+                # Background workflow tasks carry their own pause channel;
+                # otherwise `_run_engine` falls back to the TUI session.
+                pause_channel=ctx.get("_workflow_bg"),
             )
 
         result = await run_workflow(
@@ -488,11 +580,72 @@ _QUESTION_OPENERS = ("how", "what", "why", "when", "where", "who", "which",
                      "does", "do ")
 
 
+def _fuzzy_token_eq(a: str, b: str) -> bool:
+    """Same word allowing a typo: exact, or ≥0.8 similarity for words long
+    enough that a high ratio can't be a coincidence ("researh"≈"research",
+    "assistnat"≈"assistant", "assistance"≈"assistant"; "deep"≠"data")."""
+    if a == b:
+        return True
+    if len(a) < 4 or len(b) < 4:
+        return False
+    from difflib import SequenceMatcher
+    return SequenceMatcher(None, a, b).ratio() >= 0.8
+
+
+def _name_span(tokens: list[str], name: str) -> tuple[int, int] | None:
+    """Index range `(start, end)` of the CONTIGUOUS `tokens` window that
+    spells `name` — its words in order, each exact or a close typo,
+    separators (underscore/space/hyphen) irrelevant. None when absent.
+
+    Handles both phrasings uniformly: the exact slug as ONE token
+    (`deep_research_assistant`) and the spoken form as several
+    (`deep research assistant`). Each input token is itself split on
+    separators, so a slug token contributes its own sub-words to the
+    alignment and the same window logic covers every mix.
+
+    The single place both routing (`match_workflow_trigger`) and command
+    stripping (`strip_workflow_trigger`) locate the name, so they can never
+    disagree: whatever the matcher accepts, the stripper removes.
+    """
+    name_words = [w.lower() for w in re.split(r"[_\-\s]+", name) if w]
+    if not name_words:
+        return None
+    n = len(name_words)
+
+    # Flatten tokens into (sub-word, source-token-index) pairs so a slug
+    # token like "deep_research_assistant" expands to three sub-words all
+    # pointing back at the one token that must be removed. `sub_count` is how
+    # many sub-words each source token has — used to reject a partial match
+    # inside a longer slug ("ai_trends" must NOT match "ai_trends_v2").
+    flat: list[tuple[str, int]] = []
+    sub_count: dict[int, int] = {}
+    for idx, tok in enumerate(tokens):
+        for sub in re.split(r"[_\-]+", tok.strip(string.punctuation).lower()):
+            if sub:
+                flat.append((sub, idx))
+                sub_count[idx] = sub_count.get(idx, 0) + 1
+
+    from collections import Counter
+    for i in range(len(flat) - n + 1):
+        window = flat[i:i + n]
+        if not all(_fuzzy_token_eq(sub, nw)
+                   for (sub, _), nw in zip(window, name_words)):
+            continue
+        # Every source token the window touches must be FULLY consumed —
+        # otherwise the name is only a prefix/suffix of a longer slug token.
+        touched = Counter(idx for _, idx in window)
+        if all(sub_count[idx] == used for idx, used in touched.items()):
+            return (window[0][1], window[-1][1] + 1)
+    return None
+
+
 def match_workflow_trigger(text: str, names: list[str]) -> str | None:
     """Deterministic routing for "run <workflow>"-style requests.
 
     Returns the workflow name when `text` contains a trigger verb AND names
-    a registered workflow as a standalone token; None otherwise. Questions
+    a registered workflow — matched tolerantly (spaces/hyphens for the
+    slug's underscores, and per-word typos: "run deep research assistance"
+    still routes `deep_research_assistant`). None otherwise. Questions
     ("how do I run ai_trends?") don't trigger. Longest name wins so
     `order_fulfillment_eu` isn't shadowed by `order_fulfillment`.
 
@@ -500,15 +653,18 @@ def match_workflow_trigger(text: str, names: list[str]) -> str | None:
     models answer "run ai_trends workflow" with clarifying questions
     instead of calling the tool. The agent loop checks this BEFORE the
     provider call and invokes the workflow tool itself — same philosophy
-    as the auto-resume of a paused workflow.
+    as the auto-resume of a paused workflow. Matching the name the way it's
+    SPOKEN (not just the exact slug) keeps that deterministic route from
+    silently falling through to the model on a natural-language phrasing.
     """
     lowered = text.strip().lower()
     if lowered.startswith(_QUESTION_OPENERS) or lowered.endswith("?"):
         return None
     if not any(verb in lowered for verb in _TRIGGER_VERBS):
         return None
+    tokens = lowered.split()
     for name in sorted(names, key=len, reverse=True):
-        if re.search(rf"(?<![\w-]){re.escape(name.lower())}(?![\w-])", lowered):
+        if _name_span(tokens, name) is not None:
             return name
     return None
 
@@ -527,14 +683,22 @@ def strip_workflow_trigger(text: str, name: str) -> str:
 
     "run deep_research_assistant on AI in finance, 3 pages" →
     "on AI in finance, 3 pages"; "run deep_research_assistant workflow" →
-    "" (nothing left but the command). The loop feeds this — not the raw
-    message — to the workflow call as `last_user_message`, so slot
-    extraction (Tier-0/Tier-2) can never mistake the command itself for a
-    variable value (e.g. topic = "run deep_research_assistant").
+    "" (nothing left but the command). Callers feed this — not the raw
+    message — to slot extraction (Tier-0/Tier-2), so extraction can never
+    mistake the command itself for a variable value
+    (e.g. topic = "run deep_research_assistant").
+
+    The name is located the SAME way `match_workflow_trigger` matches it
+    (`_name_span`): tolerant of spaces/hyphens and per-word typos, but only
+    as a CONTIGUOUS window — so a topic sharing a word with the name
+    ("about deep learning") is never eaten, and anything the matcher routed
+    strips cleanly here.
     """
-    out = re.sub(rf"(?<![\w-]){re.escape(name)}(?![\w-])", " ",
-                 text, flags=re.IGNORECASE)
-    tokens = out.split()
+    tokens = text.split()
+    span = _name_span(tokens, name)
+    if span is not None:
+        tokens = tokens[:span[0]] + tokens[span[1]:]
+
     meaningful = [t for t in tokens
                   if t.strip(string.punctuation)
                   and t.strip(string.punctuation).lower() not in _TRIGGER_FILLER]

@@ -108,8 +108,30 @@ def _build_app(agent, provider, state):
         def __init__(self, app: "BotCircuitsTUI") -> None:
             self._app = app
 
-        async def pause(self, question: str) -> str:
-            return await self._app.ask_user(question)
+        async def pause(
+            self,
+            question: str,
+            options: list[str] | None = None,
+            default_index: int = 0,
+        ) -> str:
+            # No selector widget here (yet): options render as a numbered
+            # list under the question and a digit reply maps back. Picking
+            # "Other" re-asks for the raw answer.
+            from botcircuits.agent.option_select import (
+                OTHER_LABEL,
+                is_other_reply,
+                map_option_reply,
+            )
+            if options:
+                question = question + "\n" + "\n".join(
+                    f"  {i + 1}. {opt}"
+                    for i, opt in enumerate(list(options) + [OTHER_LABEL])
+                )
+            reply = await self._app.ask_user(question)
+            if is_other_reply(reply, options):
+                reply = await self._app.ask_user("Your answer:")
+                return reply
+            return map_option_reply(reply, options)
 
         def submit(self, coro) -> asyncio.Task:
             return self._app.submit_background(coro)

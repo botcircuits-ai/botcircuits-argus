@@ -90,15 +90,22 @@ segment executes — the same pipeline handles both phrasings:
  │     - research_depth: 3 pages                                       │
  │     Reuse them? (yes / no / change <name> …)                        │
  │                                                                     │
+ │   the pause carries selector options (yes · no · change <name>):    │
+ │   the CLI prompt renders them as an ↑/↓ + Enter / numbered picker,  │
+ │   so picking returns the canonical answer verbatim — typing a       │
+ │   free-form reply instead is always possible                        │
+ │                                                                     │
  │   reply, interpreted deterministically:                             │
- │     "yes" · "yes use" · "ok" ──► adopt all ──► first segment runs   │
+ │     "yes" · "yes do same" · "ok" ► adopt all ──► first segment runs │
  │     "no" ──────────────────────► adopt none, ask fresh (step 6)     │
  │     "i want to change pages" ──► adopt the others; the mentioned    │
  │        variable (matched by name or description words) re-resolves  │
  │        from the reply itself ("change depth to 5 pages" needs no    │
  │        further ask), else is asked in step 6                        │
- │     anything else ─────────────► treated as fresh values: the reply │
- │        runs through step 4 extraction; nothing remembered adopted   │
+ │     anything else ─────────────► LLM classification: does the reply │
+ │        pick one of the options anyway ("sounds good, run it again"  │
+ │        ► yes)? if not, it's fresh values: the reply runs through    │
+ │        step 4 extraction; nothing remembered adopted                │
  └───────────────────────────────────┬─────────────────────────────────┘
                                      │ still missing
                                      ▼
