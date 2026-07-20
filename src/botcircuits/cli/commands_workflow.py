@@ -367,6 +367,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
     usage = result.get("usage")
     if status == "paused":
         out_obj = {"status": "paused", "question": result.get("question") or ""}
+        # Predefined answers (reuse offer's yes/no/change …) so an external
+        # caller can render a selector and pass a pick back via --reply.
+        options = result.get("options")
+        if options:
+            out_obj["options"] = list(options)
         if usage:
             out_obj["usage"] = usage
         print(json.dumps(out_obj, ensure_ascii=False))

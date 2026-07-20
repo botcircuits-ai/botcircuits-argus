@@ -572,12 +572,60 @@ def workflow_tool_names(reg: ToolRegistry) -> list[str]:
             if getattr(t, "_workflow_state", None) is not None]
 
 
-#: Verbs that make a message a run request …
-_TRIGGER_VERBS = ("run", "start", "execute", "launch", "kick off", "trigger")
+#: Single-word verbs that make a message a run request. "kick off" is
+#: handled separately (a two-word phrase). Matched as whole WORDS, not
+#: substrings — otherwise "trun"/"prerun"/"overrun" would satisfy the gate
+#: (they contain "run"), and the typo verb then leaks into slot extraction.
+_TRIGGER_VERBS = frozenset({"run", "start", "execute", "launch", "trigger"})
 #: … unless it opens interrogatively (asking ABOUT a workflow, not for it).
 _QUESTION_OPENERS = ("how", "what", "why", "when", "where", "who", "which",
                      "explain", "describe", "can ", "could", "should", "is ",
                      "does", "do ")
+
+
+def _one_edit_apart(a: str, b: str) -> bool:
+    """True when `a` and `b` differ by at most a single typo — one
+    insertion, deletion, substitution, or adjacent transposition. Used for
+    the short trigger verbs where the ≥0.8-ratio rule is too coarse (it
+    rejects "trun"≈"run", only 3 chars)."""
+    if a == b:
+        return True
+    la, lb = len(a), len(b)
+    if abs(la - lb) > 1:
+        return False
+    if la == lb:  # substitution or transposition
+        diff = [i for i in range(la) if a[i] != b[i]]
+        if len(diff) == 1:
+            return True
+        if len(diff) == 2 and diff[1] == diff[0] + 1:
+            i, j = diff
+            return a[i] == b[j] and a[j] == b[i]  # swapped neighbours
+        return False
+    # off-by-one length: one insertion/deletion — the shorter is the longer
+    # with one char removed.
+    short, lng = (a, b) if la < lb else (b, a)
+    for k in range(len(lng)):
+        if short == lng[:k] + lng[k + 1:]:
+            return True
+    return False
+
+
+def _trigger_verb_index(tokens: list[str]) -> int | None:
+    """Index of the leading trigger verb in `tokens`, or None if there is
+    none. Whole-word, typo-tolerant ("trun"≈"run", "starrt"≈"start") and
+    handles the two-word "kick off". Only the FIRST few tokens are checked
+    — a run request opens with its verb, so a "run" buried mid-sentence
+    ("tell me how to run …", already a question) never counts."""
+    for i, tok in enumerate(tokens[:3]):
+        w = tok.strip(string.punctuation).lower()
+        if not w:
+            continue
+        if w == "kick" and i + 1 < len(tokens) and \
+                tokens[i + 1].strip(string.punctuation).lower() == "off":
+            return i
+        if any(_one_edit_apart(w, v) for v in _TRIGGER_VERBS):
+            return i
+    return None
 
 
 def _fuzzy_token_eq(a: str, b: str) -> bool:
@@ -660,9 +708,9 @@ def match_workflow_trigger(text: str, names: list[str]) -> str | None:
     lowered = text.strip().lower()
     if lowered.startswith(_QUESTION_OPENERS) or lowered.endswith("?"):
         return None
-    if not any(verb in lowered for verb in _TRIGGER_VERBS):
-        return None
     tokens = lowered.split()
+    if _trigger_verb_index(tokens) is None:
+        return None
     for name in sorted(names, key=len, reverse=True):
         if _name_span(tokens, name) is not None:
             return name
@@ -692,12 +740,25 @@ def strip_workflow_trigger(text: str, name: str) -> str:
     (`_name_span`): tolerant of spaces/hyphens and per-word typos, but only
     as a CONTIGUOUS window — so a topic sharing a word with the name
     ("about deep learning") is never eaten, and anything the matcher routed
-    strips cleanly here.
+    strips cleanly here. A typo'd LEADING verb ("trun") is dropped the same
+    way the matcher's gate accepts it, so it can't survive into extraction.
     """
     tokens = text.split()
     span = _name_span(tokens, name)
     if span is not None:
         tokens = tokens[:span[0]] + tokens[span[1]:]
+
+    # Drop a typo'd leading trigger verb ("trun", "starrt") that the exact
+    # filler set below would miss. Exact-spelling verbs/fillers are removed
+    # by the `_TRIGGER_FILLER` pass.
+    if tokens:
+        vi = _trigger_verb_index(tokens)
+        if vi is not None:
+            span_end = vi + 1
+            w = tokens[vi].strip(string.punctuation).lower()
+            if w == "kick":  # "kick off" is two tokens
+                span_end = vi + 2
+            tokens = tokens[:vi] + tokens[span_end:]
 
     meaningful = [t for t in tokens
                   if t.strip(string.punctuation)

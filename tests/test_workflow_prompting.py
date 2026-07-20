@@ -118,6 +118,33 @@ def test_spoken_and_slug_forms_route_the_same_longest_name():
         "order_fulfillment"
 
 
+def test_trigger_verb_matched_as_whole_word_not_substring():
+    """"overrun"/"prerun" contain "run" but are NOT run requests — the old
+    substring gate falsely accepted them, and the typo'd verb then leaked
+    into slot extraction. (Regression: "trun deep_research_assistant" saved
+    topic="trun".)"""
+    names = ["deep_research_assistant"]
+    assert match_workflow_trigger("overrun deep_research_assistant", names) is None
+    assert match_workflow_trigger("prerun deep_research_assistant", names) is None
+
+
+def test_trigger_verb_tolerates_a_typo():
+    names = ["deep_research_assistant", "ai_trends"]
+    assert match_workflow_trigger("trun deep_research_assistant", names) == \
+        "deep_research_assistant"
+    assert match_workflow_trigger("starrt ai_trends", names) == "ai_trends"
+
+
+def test_strip_drops_a_typoed_leading_verb():
+    """A typo'd verb must not survive into `last_user_message` — else
+    extraction turns "trun" into the topic."""
+    assert strip_workflow_trigger(
+        "trun deep_research_assistant", "deep_research_assistant") == ""
+    out = strip_workflow_trigger(
+        "starrt ai_trends on climate policy", "ai_trends")
+    assert out == "on climate policy"
+
+
 # -- model-issued trigger args can't poison produced variables -----------------
 
 

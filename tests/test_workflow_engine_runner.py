@@ -606,6 +606,28 @@ def test_reuse_reply_change_with_value_extracts_it(tmp_path, monkeypatch):
     assert resumed.slots["depth"] == "5 pages"
 
 
+def test_reuse_reply_change_without_value_reasks_not_fabricates(tmp_path, monkeypatch):
+    """A bare "change topic" (no replacement value) must re-ask for topic —
+    the command phrase must NEVER be extracted as the new topic. Regression:
+    "change topic" once saved topic="change topic"."""
+    _remember(tmp_path, monkeypatch, {"topic": "AI", "depth": "3 pages"})
+
+    async def resolve(*, flow, step_id, variables, slots):
+        # If extraction runs at all here it would fabricate from the command;
+        # the fix clears the message so this must see an EMPTY context.
+        assert not slots.get("__last_user_message__")
+        return {}
+
+    first = _run(_input_flow())
+    resumed = _run(_input_flow(), resolve=resolve,
+                   slots={**first.slots,
+                          "__last_user_message__": "change topic"})
+    assert resumed.paused                              # re-asks, not done
+    assert resumed.slots.get("depth") == "3 pages"     # kept
+    assert resumed.slots.get("topic") in (None, "")    # NOT "change topic"
+    assert "topic" in resumed.question
+
+
 def test_reuse_reply_free_form_is_treated_as_fresh_input(tmp_path, monkeypatch):
     _remember(tmp_path, monkeypatch, {"topic": "AI", "depth": "3 pages"})
 

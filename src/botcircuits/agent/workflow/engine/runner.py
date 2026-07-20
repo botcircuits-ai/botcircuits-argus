@@ -374,6 +374,37 @@ def interpret_reuse_reply(
     return {}, False
 
 
+def change_reply_residual(
+    reply: str,
+    mentioned: set[str],
+    variables: list[dict],
+) -> str:
+    """The part of a "change <name> …" reply that is a NEW VALUE, not the
+    change command itself. "change topic to quantum" → "quantum";
+    "change depth to 5 pages" → "5 pages"; bare "change topic" → "".
+
+    Drops the change verb, connective words ("to", "the", "it"), and every
+    token that merely names/describes a mentioned variable — what remains is
+    the value to extract. Empty means the user only asked to change it
+    WITHOUT supplying the replacement, so the caller must re-ask rather than
+    feed the bare command to extraction (which would fabricate a value).
+    """
+    stop = set(_CHANGE_WORDS) | {
+        "to", "the", "a", "an", "it", "them", "please", "value", "of",
+        "for", "into", "i", "we", "want", "wanna", "would", "like", "need",
+        "let", "lets", "make", "set", "instead", "rather", "and", "also",
+        "my", "please", "can", "you",
+    }
+    for name in mentioned:
+        spec = next((v for v in variables
+                     if v.get("variableName") == name), {})
+        stop |= _variable_mention_tokens(spec)
+    residual = [w for w in reply.split()
+                if w.strip(string.punctuation).lower() not in stop
+                and w.strip(string.punctuation)]
+    return " ".join(residual).strip()
+
+
 def _eval_message(workflow_name: str, slots: dict) -> dict:
     """Build the minimal `message` shape `evaluate_choices` reads from
     (it pulls `data.sessionContext.slots`)."""
@@ -602,6 +633,16 @@ async def run_workflow_engine(
                 # A pure decision word ("yes"/"no") must not reach value
                 # extraction — a literal "yes" is not a topic.
                 slots.pop("__last_user_message__", None)
+            elif reply.strip():
+                # A "change <name>" reply keeps the message for extraction —
+                # but ONLY if it carries a new value ("change topic to X").
+                # A bare "change topic" carries none: clear it so extraction
+                # can't turn the command itself into the value, and the run
+                # re-pauses to ASK for the replacement.
+                changed = {k for k in pending_offer if k not in accepted}
+                if changed and not change_reply_residual(
+                        reply, changed, inputs):
+                    slots.pop("__last_user_message__", None)
 
         missing = _unfilled(inputs, slots)
         if missing and resolve_unfilled is not None:
