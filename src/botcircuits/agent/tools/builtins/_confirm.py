@@ -92,8 +92,12 @@ async def confirm(title: str, lines: list[str], prompt: str = "run? [y/N]: ",
     # before we block waiting for input.
     print(_format_block(title, lines), end="", flush=True)
 
+    # Selector options for TUI channels. Highlight starts on "no" so a bare
+    # Enter keeps the [y/N] deny-by-default contract.
+    yn = ["yes", "no"]
+
     if workflow_bg is not None:
-        answer = await workflow_bg.pause(prompt)
+        answer = await workflow_bg.pause(prompt, yn, 1)
         return answer.strip().lower() in ("y", "yes")
 
     try:
@@ -103,7 +107,7 @@ async def confirm(title: str, lines: list[str], prompt: str = "run? [y/N]: ",
         tui = None
 
     if tui is not None:
-        answer = await tui.pause(prompt)
+        answer = await tui.pause(prompt, yn, 1)
         return answer.strip().lower() in ("y", "yes")
 
     sys.stderr.write(f"      {prompt}")
