@@ -166,6 +166,35 @@ def add_workflow_subparser(subparsers: argparse._SubParsersAction) -> None:
              "The build artifact mirrors the same nesting.",
     )
 
+    eval_coding_p = wf_subs.add_parser(
+        "eval-coding",
+        help="Compare the coding-workflow pipeline vs. the native agent vs. "
+             "the Claude Code CLI on objective coding tasks (tests go "
+             "red->green in a sandbox), plus an LLM-judge quality score.",
+    )
+    eval_coding_p.add_argument(
+        "--dataset", dest="coding_dataset", default=None,
+        help="Path to a single coding dataset JSON. When omitted, every "
+             "*.json under <eval-dir>/coding/ is loaded.",
+    )
+    eval_coding_p.add_argument(
+        "--repeats", dest="coding_repeats", type=int, default=3,
+        help="Runs per case × mode for consistency (default 3).",
+    )
+    eval_coding_p.add_argument(
+        "--modes", dest="coding_modes", default="pipeline,native,claude_cli",
+        help="Comma-separated subset of modes to run "
+             "(pipeline, native, claude_cli). Default: all three.",
+    )
+    eval_coding_p.add_argument(
+        "--no-judge", dest="coding_no_judge", action="store_true",
+        help="Skip the LLM-judge quality score (objective test pass/fail only).",
+    )
+    eval_coding_p.add_argument(
+        "--report", dest="coding_report", default=None,
+        help="Optional path to write the full JSON report to.",
+    )
+
     eval_p = wf_subs.add_parser(
         "eval",
         help="Run the workflow evaluation framework: compare the STM "
@@ -223,6 +252,8 @@ def run_workflow_command(args: argparse.Namespace) -> int:
         return _cmd_generate(args)
     if args.workflow_cmd == "eval":
         return _cmd_eval(args)
+    if args.workflow_cmd == "eval-coding":
+        return _cmd_eval_coding(args)
 
     out(C.red(f"[workflow] unknown subcommand: {args.workflow_cmd}"))
     return 2
@@ -752,6 +783,94 @@ def _write_workflow(path: Path, record: dict) -> None:
 # ---------------------------------------------------------------------------
 # `workflow eval`
 # ---------------------------------------------------------------------------
+
+
+def _cmd_eval_coding(args: argparse.Namespace) -> int:
+    """`workflow eval-coding` — three-way objective coding comparison.
+
+    Compares the coding-workflow pipeline vs. the native agent vs. the real
+    Claude Code CLI on coding tasks whose ground truth is 'the tests go
+    red->green in a sandbox'. Prints a three-column table; optionally writes a
+    JSON report.
+    """
+    from .app import load_cli_config, make_provider
+    from botcircuits.agent.workflow.evaluation import (
+        CODING_MODES,
+        discover_coding_datasets,
+        load_coding_dataset,
+        render_coding_report,
+        run_coding_evaluation,
+        write_coding_report,
+    )
+    from botcircuits.agent.workflow.evaluation.dataset import EvalDatasetError
+
+    # Parse the requested mode subset.
+    modes = tuple(m.strip() for m in (args.coding_modes or "").split(",")
+                  if m.strip())
+    bad = [m for m in modes if m not in CODING_MODES]
+    if bad:
+        out(C.red(f"[eval-coding] unknown mode(s): {', '.join(bad)}. "
+                  f"Valid: {', '.join(CODING_MODES)}"))
+        return 2
+    if not modes:
+        modes = CODING_MODES
+
+    try:
+        cfg = load_cli_config(args)
+    except ConfigError as e:
+        out(C.red(f"[config] {e}"))
+        return 2
+
+    try:
+        if args.coding_dataset:
+            datasets = [load_coding_dataset(Path(args.coding_dataset))]
+        else:
+            datasets = discover_coding_datasets()
+    except EvalDatasetError as e:
+        out(C.red(f"[eval-coding] {e}"))
+        return 2
+
+    if not datasets:
+        out(C.yellow("[eval-coding] no coding datasets found under "
+                     "<eval-dir>/coding/. Add one (see coding_tasks.json)."))
+        return 2
+
+    # The agent-under-test + judge provider. The agent modes need a real model
+    # (they actually edit files); claude_cli shells out and ignores it.
+    provider = make_provider(cfg.provider, cfg.model)
+    judge = not args.coding_no_judge
+    out(C.dim(
+        f"coding eval: modes={','.join(modes)} repeats={args.coding_repeats} "
+        f"judge={'on' if judge else 'off'} "
+        f"provider={cfg.provider} model={provider.model}"
+    ))
+
+    exit_code = 0
+    try:
+        for ds in datasets:
+            report = asyncio.run(run_coding_evaluation(
+                ds, provider, modes=modes,
+                repeats=args.coding_repeats, judge=judge,
+            ))
+            out(render_coding_report(report))
+            if args.coding_report:
+                report_path = Path(args.coding_report)
+                try:
+                    write_coding_report(report, report_path)
+                    out(C.dim(f"(report: {report_path})"))
+                except OSError as e:
+                    out(C.red(f"[eval-coding] failed to write report "
+                              f"{report_path}: {type(e).__name__}: {e}"))
+                    exit_code = 1
+    except Exception as e:
+        out(C.red(f"[eval-coding] failed: {type(e).__name__}: {e}"))
+        exit_code = 1
+    finally:
+        try:
+            asyncio.run(provider.aclose())
+        except Exception:
+            pass
+    return exit_code
 
 
 def _cmd_eval(args: argparse.Namespace) -> int:

@@ -60,6 +60,26 @@ from botcircuits.agent.workflow.evaluation.metrics import (
     summarize_runner,
 )
 from botcircuits.agent.workflow.evaluation.report import render_text, write_json_report
+from botcircuits.agent.workflow.evaluation.coding_dataset import (
+    CodingCase,
+    CodingDataset,
+    discover_coding_datasets,
+    load_coding_dataset,
+)
+from botcircuits.agent.workflow.evaluation.coding_metrics import (
+    CodingReport,
+    ModeSummary,
+    run_coding_evaluation,
+)
+from botcircuits.agent.workflow.evaluation.coding_report import (
+    render_coding_report,
+    write_coding_report,
+)
+from botcircuits.agent.workflow.evaluation.coding_runner import (
+    MODES as CODING_MODES,
+    CodingRunResult,
+    run_coding_case,
+)
 from botcircuits.agent.workflow.evaluation.runner_agent import (
     AgentRunResult,
     run_case_agent_no_workflow,
@@ -103,4 +123,16 @@ __all__ = [
     "run_case_agent_with_workflow",
     "run_case_prompt",
     "run_case_workflow",
+    "CodingCase",
+    "CodingDataset",
+    "CodingReport",
+    "CodingRunResult",
+    "ModeSummary",
+    "CODING_MODES",
+    "discover_coding_datasets",
+    "load_coding_dataset",
+    "run_coding_case",
+    "run_coding_evaluation",
+    "render_coding_report",
+    "write_coding_report",
 ]

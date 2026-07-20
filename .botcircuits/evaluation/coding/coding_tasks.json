@@ -1,0 +1,57 @@
+{
+  "name": "coding_tasks",
+  "description": "Objective coding tasks for comparing the coding-workflow pipeline vs. the native agent vs. the Claude Code CLI. Each case is a fixture repo copied per run; a correct change turns a failing target test GREEN without breaking the guard tests.",
+  "kind": "coding",
+  "cases": [
+    {
+      "id": "coding.add_slugify",
+      "fixture": "slugify_util",
+      "prompt": "Add a `slugify(text)` function to utils.py. It should lowercase the text, strip leading/trailing whitespace, replace runs of whitespace with a single hyphen, and remove punctuation. Make the tests in tests/test_slugify.py pass without breaking anything else.",
+      "goal": "utils.slugify lowercases, trims, collapses whitespace to single hyphens, and strips punctuation; the existing shout() helper still works.",
+      "test_command": "python -m pytest -q tests/test_slugify.py",
+      "guard_command": "python -m pytest -q tests/test_shout.py",
+      "category": "add-feature",
+      "expected": {"tests_pass": true}
+    },
+    {
+      "id": "coding.fix_discount_boundary",
+      "fixture": "fix_discount_bug",
+      "prompt": "There's a bug in pricing.py: an order subtotal of exactly 100 should get the 10% discount tier but doesn't. Fix apply_discount so the boundary is handled correctly. Don't break the other pricing tests.",
+      "goal": "apply_discount(100) returns 90.0 (10% tier applies at >= 100), and the mid-tier and above-boundary cases still pass.",
+      "test_command": "python -m pytest -q tests/test_pricing.py::test_high_tier_at_boundary",
+      "guard_command": "python -m pytest -q tests/test_pricing.py::test_no_discount tests/test_pricing.py::test_mid_tier tests/test_pricing.py::test_high_tier_above_boundary",
+      "category": "fix-bug",
+      "expected": {"tests_pass": true}
+    },
+    {
+      "id": "coding.rename_config_key",
+      "fixture": "rename_config_key",
+      "prompt": "Rename the config key `max_retries` to `retry_limit` everywhere it is defined or read across this project. Update all usages so the client still resolves the value correctly. Don't break unrelated settings.",
+      "goal": "The key is renamed to retry_limit in settings.DEFAULTS AND in every place client.py reads it (the get_setting string key and the DEFAULTS[...] reference), so Client().retries() still returns 3 and describe() still works. No stale max_retries remains.",
+      "test_command": "python -m pytest -q tests/test_rename.py",
+      "guard_command": "python -m pytest -q tests/test_smoke.py",
+      "category": "multi-file-consistency",
+      "expected": {"tests_pass": true}
+    },
+    {
+      "id": "coding.range_open_ended",
+      "fixture": "range_parser",
+      "prompt": "Extend parse_range in ranges.py to support open-ended ranges like \"3-\" meaning 'from 3 up to the cap' (e.g. parse_range(\"3-\", cap=6) == [3, 4, 5, 6]). Do not break the existing closed-range or single-value parsing.",
+      "goal": "parse_range handles open-ended specs like '3-' up to cap, AND still returns the correct lists for closed ranges ('2-4', '1-5') and single values ('7'). All four tests pass together.",
+      "test_command": "python -m pytest -q tests/test_ranges.py::test_open_ended",
+      "guard_command": "python -m pytest -q tests/test_ranges.py::test_closed_range tests/test_ranges.py::test_single_value tests/test_ranges.py::test_closed_range_wide",
+      "category": "regression-trap",
+      "expected": {"tests_pass": true}
+    },
+    {
+      "id": "coding.money_cents_convention",
+      "fixture": "money_convention",
+      "prompt": "There's a rounding bug in add_amounts in money.py: add_amounts(0.10, 0.20) returns 0.30000000000000004 instead of 0.30. Fix it. Read the project's conventions before changing money handling.",
+      "goal": "add_amounts no longer exhibits float drift AND follows the project's documented integer-cents convention (CONVENTIONS.md) rather than papering over it with a trailing round() on float-accumulated dollars.",
+      "test_command": "python -m pytest -q tests/test_money.py",
+      "guard_command": null,
+      "category": "context-dependent",
+      "expected": {"tests_pass": true}
+    }
+  ]
+}
