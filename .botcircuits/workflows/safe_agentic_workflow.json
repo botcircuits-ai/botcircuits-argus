@@ -1,278 +1,146 @@
 {
   "name": "safe_agentic_workflow",
-  "description": "SAFe Agentic Workflow (SAW)-modeled software delivery pipeline: task intake -> Business Systems Analyst requirements gate -> frontend/backend/database implementation -> QAS validation gate with per-agent reroute authority (capped at 3 cycles) -> Release Train Engineer PR shepherd (never fixes code, escalates instead) -> System Architect design review -> automated review pass -> human approval/merge, each rejection path routed back to the specific stage at fault -> documentation summary.",
+  "description": "Autonomous coding pipeline. Run for any request to write or change code: derives requirements, understands the codebase, reads docs, plans, GENERATES a per-task coding workflow, runs it, validates with the project's tests, and loops through an acceptance gate until the solution passes or the max loop count is reached, then documents the result.",
   "flow": {
     "start": "start",
     "variables": [
       {
         "variableName": "task_description",
-        "description": "The feature or task the user wants implemented, as originally provided.",
-        "dataType": "string"
+        "description": "The feature/change the user asked for, as originally stated.",
+        "input": true
       },
       {
         "variableName": "acceptance_criteria",
-        "description": "The derived, testable acceptance criteria / definition of done for the task.",
-        "dataType": "string"
+        "description": "The specific, testable definition of done derived from the task."
       },
       {
-        "variableName": "requirements_complete",
-        "description": "Whether the acceptance criteria are clear, complete, and testable.",
-        "dataType": "boolean"
+        "variableName": "codebase_notes",
+        "description": "What the relevant existing code does: files, modules, patterns, and conventions the change must fit."
       },
       {
-        "variableName": "qas_iteration",
-        "description": "Number of QAS validation cycles run against the current implementation.",
+        "variableName": "doc_notes",
+        "description": "Relevant facts from project docs (AGENTS.md, README, design notes): how to build/test, constraints, and conventions."
+      },
+      {
+        "variableName": "plan",
+        "description": "The implementation plan: the relevant areas to change and the ordered coding steps, one entry per area."
+      },
+      {
+        "variableName": "task_slug",
+        "description": "A short snake_case identifier derived from the task, used as the generated coding workflow's name/filename (e.g. add_dark_mode)."
+      },
+      {
+        "variableName": "coding_workflow_name",
+        "description": "The name of the generated per-task coding workflow: task_slug followed by _workflow."
+      },
+      {
+        "variableName": "gate_iteration",
+        "description": "How many validation/gate cycles have run so far.",
         "dataType": "number"
       },
       {
-        "variableName": "qas_approved",
-        "description": "Whether QAS validated the implementation against acceptance_criteria.",
-        "dataType": "boolean"
-      },
-      {
-        "variableName": "qas_reroute_target",
-        "description": "Which coding agent (frontend, backend, or database) owns the defect QAS found.",
-        "dataType": "string"
-      },
-      {
-        "variableName": "architect_iteration",
-        "description": "Number of System Architect design-review cycles run.",
+        "variableName": "max_loops",
+        "description": "The maximum number of validation/gate cycles allowed before the pipeline stops looping (default 3).",
         "dataType": "number"
       },
       {
-        "variableName": "architect_approved",
-        "description": "Whether the System Architect approved the architecture/design of the implementation.",
+        "variableName": "tests_passed",
+        "description": "Whether the project's test command exited successfully on the latest implementation.",
         "dataType": "boolean"
       },
       {
-        "variableName": "automated_review_iteration",
-        "description": "Number of automated (lint/style/consistency) review cycles run.",
-        "dataType": "number"
+        "variableName": "validation_output",
+        "description": "The captured stdout/stderr and exit status of the latest test run."
       },
       {
-        "variableName": "automated_review_passed",
-        "description": "Whether the automated review pass found no blocking issues.",
+        "variableName": "solution_accepted",
+        "description": "Whether the acceptance gate judged the implementation complete and correct against the acceptance criteria.",
         "dataType": "boolean"
       },
       {
-        "variableName": "pr_ready",
-        "description": "Whether the Release Train Engineer confirmed the PR is ready to move into review.",
-        "dataType": "boolean"
+        "variableName": "revision_findings",
+        "description": "When the gate rejects: the specific defects/gaps the next coding pass must fix. Empty when accepted."
       }
     ],
     "steps": {
       "start": {
         "type": "start",
-        "next": "collect_task"
-      },
-      "collect_task": {
-        "type": "question",
-        "settings": {
-          "action": "Please describe the task you want implemented. Include: the feature or problem to solve, specific requirements, acceptance criteria if you already have them, and relevant context (tech stack, constraints, etc.)."
-        },
         "next": "requirements_gate"
       },
       "requirements_gate": {
         "type": "agentAction",
         "settings": {
-          "action": "You are a Business Systems Analyst. Review task_description (and any clarification provided since the last pass) and derive acceptance_criteria: a specific, testable definition of done. If the task description already contains clear acceptance criteria, formalize them; if requirements are missing, ambiguous, or too vague to derive testable criteria from, set requirements_complete to false and write down exactly what is missing or unclear. Otherwise set requirements_complete to true. Do not guess at missing requirements — only proceed when they are actually clear."
+          "action": "Requirements analyst. Read task_description and derive acceptance_criteria: a specific, testable definition of done for this coding task. If the task already implies clear criteria, formalize them; do not invent scope beyond what was asked. Also derive task_slug: a short snake_case identifier for the task (e.g. 'add a dark-mode toggle' -> add_dark_mode), and set coding_workflow_name to task_slug + '_workflow'. Set max_loops to 3 and gate_iteration to 0."
         },
-        "next": "init_pipeline_state",
+        "next": "code_understanding"
+      },
+      "code_understanding": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Explore the codebase for the areas this task touches. Use read/search/list tools (never guess). Record in codebase_notes: the relevant files and modules, the existing patterns and conventions the change must follow, and the integration points the new code will connect to."
+        },
+        "next": "doc_read"
+      },
+      "doc_read": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Read the project's docs relevant to this task (AGENTS.md, README, and any design/architecture notes). Record in doc_notes: how to build and TEST the project (the exact test command), and any constraints or conventions the implementation must respect."
+        },
+        "next": "planning"
+      },
+      "planning": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Using acceptance_criteria, codebase_notes, and doc_notes, write plan: the implementation plan for this task. Break the work into the relevant AREAS to change (as many as the task needs) and, for each area, the ordered coding step(s) that implement it. Keep it concrete and grounded in the actual files found. This plan drives the generated coding workflow's steps."
+        },
+        "next": "author_coding_workflow"
+      },
+      "author_coding_workflow": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Generate the per-task coding workflow from plan and write it under the coding/ subdir. Follow the 'botcircuits-coding-workflow-authoring' skill contract: the generated workflow must START with a check_revision branch that does a targeted fix pass when revision_findings is non-empty, then have one coding step per area from plan (dynamic count), then a final self-check step; it must contain NO question steps and NO review/approval steps (those live here in the pipeline). Write the intent-only source to a file and run: `botcircuits workflow generate --from <that file> --name <coding_workflow_name> --subdir coding --build`. Confirm the build succeeded (the runnable artifact exists at .botcircuits/workflows/.build/coding/<coding_workflow_name>.json)."
+        },
+        "next": "run_coding_workflow"
+      },
+      "run_coding_workflow": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Execute the generated coding workflow with shell_exec: `botcircuits workflow run --name <coding_workflow_name> --initial-args '{\"revision_findings\": \"<current revision_findings, empty on the first pass>\"}'`. This performs the actual code changes. Report what it did."
+        },
+        "next": "deterministic_validation"
+      },
+      "deterministic_validation": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Run the project's test command (from doc_notes) with shell_exec and capture the full output and exit status into validation_output. Set tests_passed to true only if the command exited 0. Do not narrate success without a real passing run — the pass/fail is the exit code."
+        },
+        "next": "validation_gate"
+      },
+      "validation_gate": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Acceptance gate. Increment gate_iteration by 1. Judge the implementation against acceptance_criteria using tests_passed and validation_output. If the tests passed AND the criteria are fully and correctly met, set solution_accepted=true and clear revision_findings (empty). Otherwise set solution_accepted=false and write revision_findings: the specific defects, failing tests, and unmet criteria the next coding pass must fix."
+        },
         "conditions": [
           {
-            "condition": "requirements_complete is false",
-            "next": "clarify_requirements"
+            "condition": "solution_accepted is true",
+            "next": "documentation"
+          },
+          {
+            "condition": "gate_iteration reaches 3",
+            "next": "documentation"
+          },
+          {
+            "condition": "solution_accepted is false",
+            "next": "run_coding_workflow"
           }
-        ]
+        ],
+        "next": "documentation"
       },
-      "clarify_requirements": {
-        "type": "question",
-        "settings": {
-          "action": "The task description is missing information needed to derive clear, testable acceptance criteria. Please answer the specific questions raised by the requirements review above so the acceptance criteria can be finalized."
-        },
-        "next": "requirements_gate"
-      },
-      "init_pipeline_state": {
-        "type": "systemAction",
-        "settings": {
-          "action": "Initialize workflow state for a fresh implementation pass: set qas_iteration to 0, qas_approved to false, architect_iteration to 0, architect_approved to false, automated_review_iteration to 0, automated_review_passed to false, and pr_ready to false."
-        },
-        "next": "frontend_coding_agent"
-      },
-      "frontend_coding_agent": {
+      "documentation": {
         "type": "agentAction",
         "settings": {
-          "action": "You are a frontend coding agent specializing in UI and client-side logic. Based on acceptance_criteria, implement or fix all frontend components: UI layouts, forms, client-side state management, API call integrations, and input validation. If you are here because QAS, the System Architect, automated review, or the human reviewer rerouted a specific defect to you, fix exactly that defect. Produce complete, working code files and document what you built or changed and which acceptance criteria it addresses."
-        },
-        "next": "backend_coding_agent"
-      },
-      "backend_coding_agent": {
-        "type": "agentAction",
-        "settings": {
-          "action": "You are a backend coding agent specializing in server-side logic and APIs. Based on acceptance_criteria, implement or fix all backend components: API endpoints, business logic services, authentication and authorization, input validation, and integrations with external systems. If you are here because QAS, the System Architect, automated review, or the human reviewer rerouted a specific defect to you, fix exactly that defect. Produce complete, working code files and document what you built or changed and which acceptance criteria it addresses."
-        },
-        "next": "database_coding_agent"
-      },
-      "database_coding_agent": {
-        "type": "agentAction",
-        "settings": {
-          "action": "You are a database coding agent specializing in data modeling and persistence. Based on acceptance_criteria, implement or fix all database components: schema definitions, migrations, indexes, queries, and the data access layer. If you are here because QAS, the System Architect, automated review, or the human reviewer rerouted a specific defect to you, fix exactly that defect. Produce complete, working code files and document what you built or changed and which acceptance criteria it addresses."
-        },
-        "next": "qas_validation"
-      },
-      "qas_validation": {
-        "type": "agentAction",
-        "settings": {
-          "action": "You are the Quality Assurance Specialist (QAS) and hold iteration authority over this pipeline. Increment qas_iteration by 1. Validate the current implementation from the frontend, backend, and database agents against every item in acceptance_criteria. If every criterion is met, set qas_approved to true. Otherwise set qas_approved to false, identify precisely which acceptance criterion failed and in which layer the defect lives, and set qas_reroute_target to exactly one of `frontend`, `backend`, or `database` — whichever agent owns the fix. Write specific, actionable findings for that agent."
-        },
-        "next": "frontend_coding_agent",
-        "conditions": [
-          {
-            "condition": "qas_approved is true",
-            "next": "pr_shepherd"
-          },
-          {
-            "condition": "qas_iteration equals 3",
-            "next": "pr_shepherd"
-          },
-          {
-            "condition": "qas_iteration exceeds 3",
-            "next": "pr_shepherd"
-          },
-          {
-            "condition": "qas_reroute_target is frontend",
-            "next": "frontend_coding_agent"
-          },
-          {
-            "condition": "qas_reroute_target is backend",
-            "next": "backend_coding_agent"
-          },
-          {
-            "condition": "qas_reroute_target is database",
-            "next": "database_coding_agent"
-          }
-        ]
-      },
-      "pr_shepherd": {
-        "type": "agentAction",
-        "settings": {
-          "action": "You are the Release Train Engineer, acting as PR shepherd. You do NOT write, fix, or modify code. Summarize the changes made by the frontend, backend, and database agents, and confirm QAS sign-off from qas_approved. If qas_approved is true, set pr_ready to true and prepare a PR summary for review. If qas_approved is false (the QAS cycle cap was reached without approval), do not attempt to fix anything yourself — set pr_ready to false and write an escalation summary describing exactly which acceptance criteria remain unresolved and why."
-        },
-        "next": "architect_review",
-        "conditions": [
-          {
-            "condition": "pr_ready is false",
-            "next": "escalate_unresolved_qas"
-          }
-        ]
-      },
-      "escalate_unresolved_qas": {
-        "type": "agentAction",
-        "settings": {
-          "action": "The QAS validation cycle cap was reached without approval and the Release Train Engineer escalated rather than attempting a fix. Compile the QAS findings history and the Release Train Engineer's escalation summary into a single report describing the unresolved acceptance criteria, for a human to decide how to proceed."
-        },
-        "next": "human_approval"
-      },
-      "architect_review": {
-        "type": "agentAction",
-        "settings": {
-          "action": "You are the System Architect. Increment architect_iteration by 1. Review the implementation at the architecture/design level: component boundaries, integration correctness between frontend/backend/database, consistency with existing system design, and technical debt introduced. This is distinct from QAS's acceptance-criteria-level review — evaluate structure and design quality, not just whether acceptance criteria pass. If the design is sound, set architect_approved to true. Otherwise set architect_approved to false and write specific findings describing what must change and which layer is affected."
-        },
-        "next": "frontend_coding_agent",
-        "conditions": [
-          {
-            "condition": "architect_approved is true",
-            "next": "automated_review"
-          },
-          {
-            "condition": "architect_iteration equals 3",
-            "next": "automated_review"
-          },
-          {
-            "condition": "architect_iteration exceeds 3",
-            "next": "automated_review"
-          }
-        ]
-      },
-      "automated_review": {
-        "type": "agentAction",
-        "settings": {
-          "action": "Run the automated review pass: lint, style, and cross-file consistency checks across all changed frontend, backend, and database code. Increment automated_review_iteration by 1. If no blocking issues are found, set automated_review_passed to true. Otherwise set automated_review_passed to false and list the specific blocking issues found."
-        },
-        "next": "frontend_coding_agent",
-        "conditions": [
-          {
-            "condition": "automated_review_passed is true",
-            "next": "human_approval"
-          },
-          {
-            "condition": "automated_review_iteration equals 3",
-            "next": "human_approval"
-          },
-          {
-            "condition": "automated_review_iteration exceeds 3",
-            "next": "human_approval"
-          }
-        ]
-      },
-      "human_approval": {
-        "type": "question",
-        "settings": {
-          "action": "The PR summary, QAS sign-off status, architecture review, and automated review results are above. Reply 'approve' to merge, or 'reject' with comments explaining what's wrong: say whether it's an implementation/coding defect, an acceptance-criteria (QAS-level) issue, or an architecture/design issue."
-        },
-        "next": "documentation_agent",
-        "conditions": [
-          {
-            "condition": "human rejects citing an implementation defect",
-            "next": "reset_for_recode"
-          },
-          {
-            "condition": "human rejects citing a coding defect",
-            "next": "reset_for_recode"
-          },
-          {
-            "condition": "human rejects citing an acceptance criteria issue",
-            "next": "reset_for_qas"
-          },
-          {
-            "condition": "human rejects citing a QAS-level issue",
-            "next": "reset_for_qas"
-          },
-          {
-            "condition": "human rejects citing an architecture issue",
-            "next": "reset_for_architect"
-          },
-          {
-            "condition": "human rejects citing a design issue",
-            "next": "reset_for_architect"
-          }
-        ]
-      },
-      "reset_for_recode": {
-        "type": "systemAction",
-        "settings": {
-          "action": "Reset qas_iteration to 0, qas_approved to false, architect_iteration to 0, architect_approved to false, automated_review_iteration to 0, automated_review_passed to false, and pr_ready to false, so the full validation pipeline re-runs after the human-flagged coding defect is fixed."
-        },
-        "next": "frontend_coding_agent"
-      },
-      "reset_for_qas": {
-        "type": "systemAction",
-        "settings": {
-          "action": "Reset qas_iteration to 0, qas_approved to false, architect_iteration to 0, architect_approved to false, automated_review_iteration to 0, automated_review_passed to false, and pr_ready to false, so QAS re-validates against the human's acceptance-criteria feedback and downstream gates re-run."
-        },
-        "next": "qas_validation"
-      },
-      "reset_for_architect": {
-        "type": "systemAction",
-        "settings": {
-          "action": "Reset architect_iteration to 0, architect_approved to false, automated_review_iteration to 0, automated_review_passed to false, and pr_ready to false, so the System Architect re-reviews against the human's architecture feedback and downstream gates re-run."
-        },
-        "next": "architect_review"
-      },
-      "documentation_agent": {
-        "type": "agentAction",
-        "settings": {
-          "action": "You are a documentation agent. Write a comprehensive implementation summary document with these sections: 1) What Was Built — feature overview and all components delivered, 2) Architecture — how the frontend, backend, and database layers integrate, informed by the System Architect's findings, 3) Acceptance Criteria Checklist — confirm each item in acceptance_criteria and its status, 4) Setup and Deployment Instructions — step-by-step guide to run or deploy the implementation, 5) Review History — summarize every QAS reroute (which agent, why), every architect finding, every automated review issue, and the human approval decision, 6) Future Improvements — recommended follow-up work. Ground every statement in acceptance_criteria and the actual code and findings produced during the pipeline."
+          "action": "Write a concise implementation summary: what was built/changed (grounded in the actual code produced), which acceptance_criteria were met and any that were not, the final test result from validation_output, and any known limitations or follow-ups. If the loop hit max_loops without acceptance, say so plainly and list the outstanding revision_findings."
         }
       }
     }

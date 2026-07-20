@@ -17,6 +17,10 @@ import string
 from botcircuits.agent.tools import LocalTool, ToolRegistry
 from botcircuits.providers.base import LLMProvider
 from botcircuits.agent.workflow import local
+from botcircuits.agent.workflow.coding_route import (
+    CODING_PIPELINE_WORKFLOW,
+    is_coding_request,
+)
 from botcircuits.agent.workflow.cli_commands import (
     compose_workflow_empty_action,
     compose_workflow_step_directive,
@@ -877,6 +881,8 @@ async def register_workflows(
 
 __all__ = [
     "LocalWorkflowError",
+    "CODING_PIPELINE_WORKFLOW",
+    "is_coding_request",
     "fetch_workflows",
     "run_workflow",
     "workflow_tool",

@@ -50,7 +50,9 @@ from botcircuits.agent.verification import (
     verification_nudge,
 )
 from botcircuits.agent.workflow import (
+    CODING_PIPELINE_WORKFLOW,
     active_workflow_names,
+    is_coding_request,
     match_workflow_trigger,
     strip_workflow_trigger,
     workflow_tool_names,
@@ -82,6 +84,7 @@ class Agent(SegmentRunner):
         verify_attempts: int = 3,
         require_run: bool = True,
         agents_dir: str | Path = ".",
+        enable_coding_pipeline: bool = True,
     ):
         self.provider = provider
         self.user_tools = tools or ToolRegistry()
@@ -129,6 +132,14 @@ class Agent(SegmentRunner):
         self.verify_attempts = verify_attempts
         self.require_run = require_run
         self.agents_dir = Path(agents_dir)
+        # Deterministic coding-task routing: when True (the default) and the
+        # static coding pipeline workflow (`CODING_PIPELINE_WORKFLOW`) is
+        # registered, a message detected as a coding request
+        # (`is_coding_request`) is handed straight to that pipeline instead
+        # of the normal model-driven turn — the same before-any-provider-call
+        # philosophy as the workflow trigger route. No-op when the pipeline
+        # workflow isn't on disk, so it's safe to leave on everywhere.
+        self.enable_coding_pipeline = enable_coding_pipeline
 
         # Roots scanned for filesystem skills on start(). Callers can
         # pass an explicit list (or []) to override the default project
@@ -381,9 +392,14 @@ class Agent(SegmentRunner):
            workflow tool directly. Tool routing must not depend on the
            model: smaller models answer a run request with clarifying
            questions instead of calling the tool.
+        3. coding — a message detected as a request to write/change code
+           (`is_coding_request`) is routed to the static coding PIPELINE
+           workflow, which derives requirements, plans, generates + runs a
+           per-task coding workflow, and validates it in a gated loop. Same
+           deterministic-before-the-model rationale as the trigger route.
 
         Returns the synthetic call's `(tool_call, output, is_error)` or None
-        when neither applies (the normal model-driven turn proceeds).
+        when none apply (the normal model-driven turn proceeds).
         """
         resumed = await self._resume_active_workflow(convo,
                                                      event_sink=event_sink)
@@ -393,15 +409,27 @@ class Agent(SegmentRunner):
             return None
         name = match_workflow_trigger(user_input,
                                       workflow_tool_names(self.tools))
-        if name is None:
-            return None
-        # The trigger message is COMMAND, not input: hand the workflow only
-        # what remains after the trigger phrase is stripped, so slot
-        # extraction can't mistake "run <name>" for a variable value.
-        return await self._call_workflow_tool(
-            convo, name, event_sink=event_sink,
-            last_user_message=strip_workflow_trigger(user_input, name),
-        )
+        if name is not None:
+            # The trigger message is COMMAND, not input: hand the workflow
+            # only what remains after the trigger phrase is stripped, so slot
+            # extraction can't mistake "run <name>" for a variable value.
+            return await self._call_workflow_tool(
+                convo, name, event_sink=event_sink,
+                last_user_message=strip_workflow_trigger(user_input, name),
+            )
+        # Coding route: only when enabled, the message looks like a coding
+        # task, and the pipeline workflow is actually registered on disk.
+        if (self.enable_coding_pipeline
+                and CODING_PIPELINE_WORKFLOW in workflow_tool_names(self.tools)
+                and is_coding_request(user_input)):
+            # The full message IS the task description — pass it through
+            # untouched (unlike the trigger route, there's no command phrase
+            # to strip) so the pipeline's requirements step sees everything.
+            return await self._call_workflow_tool(
+                convo, CODING_PIPELINE_WORKFLOW, event_sink=event_sink,
+                last_user_message=user_input,
+            )
+        return None
 
     async def _call_workflow_tool(
         self,
