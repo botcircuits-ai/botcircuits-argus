@@ -1,19 +1,21 @@
 <h1 align="center">Argus</h1>
 
 <p align="center">
-  <strong>Enforce structure where it must hold. Reason only where it's needed.</strong>
+  <strong>Graph engineering for AI agents — with the routing compiled ahead of time.</strong>
 </p>
 
 ---
 
-An agent skill (Claude, Hermes, etc.) that runs your repetitive workflows **predictably**, **traceably**, and **cost-efficiently** — cutting **~80%** of tokens usage while keeping full accuracy.
+Argus lets AI agents (Claude Code, Hermes, Codex, OpenClaw) execute your processes as a graph: nodes that do the work, edges that route between them, and shared state flowing along those edges. 
+
+In Argus, the edges are compiled into a deterministic flow before the first run. so the model does the work, and the graph does the routing.
 
 ![botcircuits-agent-solution](docs/solution.png)
 
 <p align="center">
-  <img alt="Tokens Saved" src="https://img.shields.io/badge/Tokens_Saved-80%25-brightgreen?style=for-the-badge">
   <img alt="Consistency" src="https://img.shields.io/badge/Consistency-1.00-brightgreen?style=for-the-badge">
   <img alt="Decision Accuracy" src="https://img.shields.io/badge/Decision_Accuracy-100%25-brightgreen?style=for-the-badge">
+  <img alt="Tokens Saved" src="https://img.shields.io/badge/Tokens_Saved-80%25-brightgreen?style=for-the-badge">
   <img alt="Run Latency" src="https://img.shields.io/badge/Run_Latency-1.4x_faster-blue?style=for-the-badge">
 </p>
 <p align="center"><sub>measured across 4 use cases · see <a href="#benchmark">Benchmark</a></sub></p>
@@ -25,18 +27,42 @@ An agent skill (Claude, Hermes, etc.) that runs your repetitive workflows **pred
 ## Stateful memory context
 **Provide only the context that matters**. Argus tracks state changes and supplies the agent with the exact memory needed for the current step, improving reliability while reducing token usage.
 
+```
+claude > "create a pr review workflow: audit the diff for security, and logic.
+          converge the findings. apply fixes. run the test suite. merge if it passes,
+          otherwise loop back to the fixer"
+claude > "run pr review for PR #482"
+```
 ---
 
-## How it works
+## Why a graph at all
+ 
+A agent in a loop re-derives its plan on every turn. It re-reads the whole context, re-reasons about what to do next, and reaches a slightly different conclusion each time. 
 
-Argus ships **two skills** your agent loads:
-
-| Skill | The user says… | The agent does… |
+the LLM reads the state, decides which branch to take, and you're paying tokens and nondeterminism at every junction
+ 
+Argus draws the line differently:
+ 
+| | Node | Edge |
 |---|---|---|
-| **botcircuits-workflow-authoring** | _"create an order fulfillment workflow with …"_ | Writes the workflow JSON and **builds** it into a runnable state machine. |
-| **botcircuits-workflow-running** | _"run order fulfillment"_ | Runs the workflow — the **deterministic engine** drives navigation in the background and dispatches each action to the AI agent. |
+| **Who decides** | The AI agent | The deterministic engine |
+| **What it does** | Calls tools, reads APIs, writes results | Evaluates a compiled rule, picks the next node |
+| **Varies run to run** | Yes | No |
+ 
+**The agent is the worker, not the router.** Same inputs, same path, every time.
 
 ---
+
+## The three primitives
+ 
+### Nodes — where the model works
+Each node is one unit of work: an `agentAction` the host agent carries out, a `question` that collects input. A node receives only the state it declares. not the whole conversation and returns its result into shared state.
+ 
+### Edges — compiled, not interpreted
+You author edges in plain business language (`"all items are in stock"`). A build step compiles each one into a concrete `choices[]` rule the engine evaluates identically on every run. **No LLM interpretation happens at navigation time.** This is the core claim of the Argus, and it's what makes runs reproducible and auditable.
+ 
+### State — scoped along the edges
+The build aggregates a `flow.variables` list across the whole graph, so the engine knows exactly what each node reads and writes. Instead of dragging a growing context window through every step, Argus hands each node just the variables it needs.
 
 ## Installation
 
