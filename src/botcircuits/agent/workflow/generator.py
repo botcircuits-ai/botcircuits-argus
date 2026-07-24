@@ -59,7 +59,7 @@ def _prompt(instructions: str, name: str, resources: str = "") -> str:
         "    ],",
         '    "steps": {',
         '      "<step_id>": {',
-        '        "type": "agentAction | question | listDecision",',
+        '        "type": "agentAction | question | listDecision | parallel",',
         '        "settings": { "action": "<plain-language instruction>" },',
         '        "conditions": [ { "condition": "<plain-language branch '
         'rule>", "next": "<step id or outcome>" } ],',
@@ -123,6 +123,15 @@ def _prompt(instructions: str, name: str, resources: str = "") -> str:
         "- A listDecision may set `nullOn` {field:[decisionLabels]} to blank a "
         "field for certain outcomes (e.g. a rejected item has no total: "
         '{"line_total": ["reject"]}).',
+        "- Use a `parallel` step ONLY when the instructions explicitly call for "
+        "independent work done at the same time (e.g. \"check credit and "
+        "inventory simultaneously\"). Shape: "
+        '{ "type": "parallel", "branches": {"<name>": ["<step id>", ...], ...}, '
+        '"next": "<step after every branch finishes>" }. Each branch is a list '
+        "of step ids (already defined in `steps`) run in order; a branch step "
+        "must NOT carry `conditions`/branch logic, must NOT be a `question`, "
+        "and must NOT itself be `parallel` — branches run concurrently and must "
+        "complete without pausing or branching internally.",
         "",
         "So: read header/screening facts via resolvers, process line items via a "
         "listDecision with itemFacts — aim for a workflow that runs WITHOUT "

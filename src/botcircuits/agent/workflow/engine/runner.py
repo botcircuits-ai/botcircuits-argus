@@ -28,6 +28,7 @@ agent's existing tools / skills / MCP wiring.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import string
@@ -134,6 +135,170 @@ class SegmentRunner(Protocol):
         data_variables: list[dict] | None = None,
         agent: str | None = None,
     ) -> SegmentResult: ...
+
+
+class WorkflowParallelError(RuntimeError):
+    """Raised when a `parallel` step's branches fail and the step has no
+    `onError` route — a branch paused (asked the user something) or raised,
+    or two branches wrote conflicting values to the same slot. Branches run
+    concurrently and must never pause: there is no defined way to hold some
+    branches "waiting" while a sibling asks the user something and the
+    engine yields, so any such outcome is a hard failure of the whole node
+    rather than a workflow-level pause."""
+
+
+@dataclass
+class _ParallelOutcome:
+    """What running one `parallel` step's branches (`_run_parallel_branches`)
+    produced."""
+    failed: bool = False
+    error_summary: str = ""
+    merged_slots: dict[str, Any] = field(default_factory=dict)
+    decisions: list[dict] = field(default_factory=list)
+    usage: "RunUsage | None" = None
+
+
+async def _run_branch_chain(
+    branch_name: str,
+    branch_segments: list[dict],
+    *,
+    flow: dict,
+    run_segment: SegmentRunner,
+    slots: dict[str, Any],
+) -> tuple[dict[str, Any], list["ActionUsage"]]:
+    """Run one `parallel` branch's pre-compiled segment chain to completion
+    against its OWN slot snapshot (never the shared `slots` dict — branches
+    run concurrently and must not observe each other's writes mid-flight).
+
+    Returns `(branch's final slots, per-segment usage records)`. Raises
+    `WorkflowParallelError` if any inner segment pauses (branches must never
+    pause — see `WorkflowParallelError`) or if the underlying `run_segment`
+    call itself raises (re-raised wrapped, so `asyncio.gather` sees one
+    uniform failure kind per branch).
+    """
+    branch_slots = dict(slots)
+    branch_usage: list["ActionUsage"] = []
+    data_variables = _data_variables(flow)
+
+    try:
+        for seg in branch_segments:
+            actions = _action_texts(flow, seg.get("steps") or [], branch_slots)
+            seg_kwargs: dict[str, Any] = {}
+            if data_variables:
+                seg_kwargs["data_variables"] = data_variables
+            segment_agent = seg.get("agent")
+            if segment_agent:
+                seg_kwargs["agent"] = segment_agent
+            result = await run_segment(
+                actions=actions,
+                branch_variables=[],
+                system_notes=[],
+                slots=branch_slots,
+                **seg_kwargs,
+            )
+            if result.usage is not None:
+                if not result.usage.step:
+                    result.usage.step = seg.get("id") or ""
+                branch_usage.append(result.usage)
+            if result.paused:
+                raise WorkflowParallelError(
+                    f"branch {branch_name!r} paused (asked "
+                    f"{result.question!r}) — parallel branches must "
+                    f"complete without pausing"
+                )
+            if result.captured_slots:
+                branch_slots.update(result.captured_slots)
+    except WorkflowParallelError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - surfaced as a branch failure
+        raise WorkflowParallelError(
+            f"branch {branch_name!r} raised {exc!r}"
+        ) from exc
+
+    return branch_slots, branch_usage
+
+
+async def _run_parallel_branches(
+    parallel: dict,
+    *,
+    flow: dict,
+    run_segment: SegmentRunner,
+    slots: dict[str, Any],
+    event_sink: Callable[[str, Any], Awaitable[None]] | None,
+    parallel_step_id: str,
+) -> _ParallelOutcome:
+    """Run every branch of a `parallel` segment concurrently and join.
+
+    Each branch gets its own snapshot of `slots` taken up front (concurrent
+    branches must not see each other's writes). `asyncio.gather(...,
+    return_exceptions=True)` lets every branch run to completion even if a
+    sibling fails, so cancellation never races with a branch's own side
+    effects; on any branch failure the whole node fails — no partial merge,
+    matching the "no partial pause/resume state" decision for this feature.
+    Two branches writing DIFFERENT values to the same slot key is also a
+    failure (silent last-write-wins would hide a real authoring bug);
+    identical values coalesce without complaint.
+    """
+    from botcircuits.usage.run_usage import RunUsage
+
+    branches: dict[str, list[dict]] = parallel.get("branches") or {}
+    names = list(branches)
+    coros = [
+        _run_branch_chain(
+            name, branches[name], flow=flow, run_segment=run_segment,
+            slots=slots,
+        )
+        for name in names
+    ]
+    results = await asyncio.gather(*coros, return_exceptions=True)
+
+    outcome = _ParallelOutcome(usage=RunUsage())
+    failures: list[str] = []
+    merged: dict[str, Any] = {}
+    for name, result in zip(names, results):
+        if isinstance(result, BaseException):
+            reason = (
+                str(result) if isinstance(result, WorkflowParallelError)
+                else repr(result)
+            )
+            failures.append(f"{name}: {reason}")
+            continue
+        branch_slots, branch_usage = result
+        for one in branch_usage:
+            outcome.usage.add(one)
+        for key, value in branch_slots.items():
+            if key in slots and slots[key] == value:
+                continue  # unchanged carried-through value, not a new write
+            if key in merged and merged[key] != value:
+                failures.append(
+                    f"slot collision on {key!r}: branch {name!r} wrote "
+                    f"{value!r}, conflicting with an earlier branch's "
+                    f"{merged[key]!r}"
+                )
+                continue
+            merged[key] = value
+        outcome.decisions.append(
+            {"parallel": parallel_step_id, "branch": name, "status": "ok"})
+
+    if failures:
+        outcome.failed = True
+        outcome.error_summary = (
+            f"parallel step {parallel_step_id!r} failed: "
+            + "; ".join(failures)
+        )
+        outcome.decisions.extend(
+            {"parallel": parallel_step_id, "branch": name, "status": "error"}
+            for name in names
+            if not any(d.get("branch") == name for d in outcome.decisions)
+        )
+        await _emit(event_sink, "parallel_error", {
+            "step": parallel_step_id,
+            "error": outcome.error_summary,
+        })
+        return outcome
+
+    outcome.merged_slots = merged
+    return outcome
 
 
 def _segments_for(flow: dict) -> list[dict]:
@@ -702,6 +867,34 @@ async def run_workflow_engine(
                 decisions=decisions,
                 usage=run_usage,
             )
+
+        parallel = current.get("parallel")
+        if parallel is not None:
+            await _emit(event_sink, "step_enter", {
+                "step": current.get("id"),
+                "steps": [current.get("id")],
+                "actions": [],
+                "slots": dict(slots),
+            })
+            outcome = await _run_parallel_branches(
+                parallel, flow=flow, run_segment=run_segment, slots=slots,
+                event_sink=event_sink, parallel_step_id=current.get("id"),
+            )
+            if outcome.failed:
+                on_error = parallel.get("onError")
+                if on_error:
+                    slots["__parallel_error__"] = outcome.error_summary
+                    decisions.extend(outcome.decisions)
+                    current = by_id.get(on_error)
+                    continue
+                raise WorkflowParallelError(outcome.error_summary)
+            slots.update(outcome.merged_slots)
+            decisions.extend(outcome.decisions)
+            if outcome.usage is not None:
+                for one in outcome.usage.steps:
+                    run_usage.add(one)
+            current = by_id.get(parallel.get("next")) if parallel.get("next") else None
+            continue
 
         branch_step_id = current.get("branchStep")
         branch_variables = (

@@ -1,0 +1,141 @@
+{
+  "name": "pr_review",
+  "description": "Unattended PR review pipeline: audits the diff for security and logic issues, converges the findings, applies fixes, runs the test suite, and merges once green. If the test suite still fails after a fix pass, loops back to the fixer (capped) instead of asking a human.",
+  "flow": {
+    "start": "start",
+    "variables": [
+      {
+        "variableName": "pr_number",
+        "description": "The PR identifier to review, e.g. from a run request like 'run pr review for PR #482'.",
+        "dataType": "string"
+      },
+      {
+        "variableName": "security_findings",
+        "description": "Security issues found in the diff (injection, auth/authz, secrets, unsafe deserialization, SSRF, path traversal, vulnerable dependencies, etc.), one per line with file, line, severity, and the issue.",
+        "dataType": "string"
+      },
+      {
+        "variableName": "logic_findings",
+        "description": "Logic/correctness issues found in the same diff (off-by-one errors, incorrect conditionals, missing edge cases, race conditions, broken control flow, incorrect state mutations, etc.), one per line with file, line, severity, and the issue.",
+        "dataType": "string"
+      },
+      {
+        "variableName": "converged_findings",
+        "description": "security_findings and logic_findings merged into one deduplicated, severity-ordered list of actionable issues.",
+        "dataType": "string"
+      },
+      {
+        "variableName": "findings_present",
+        "description": "Whether converged_findings contains at least one actionable issue.",
+        "dataType": "boolean"
+      },
+      {
+        "variableName": "fix_iteration",
+        "description": "Number of fix/test cycles run so far in this review.",
+        "dataType": "number"
+      },
+      {
+        "variableName": "tests_passed",
+        "description": "Whether the test suite passed on the most recent run.",
+        "dataType": "boolean"
+      },
+      {
+        "variableName": "test_output",
+        "description": "Which tests failed and why, from the most recent test run; guides the next fix pass.",
+        "dataType": "string"
+      },
+      {
+        "variableName": "merged",
+        "description": "Whether the PR was merged.",
+        "dataType": "boolean"
+      }
+    ],
+    "steps": {
+      "start": {
+        "type": "start",
+        "next": "fetch_diff"
+      },
+      "fetch_diff": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Fetch the full diff for pr_number (e.g. `gh pr diff <pr_number>`). Keep the diff content available for the audit steps that follow."
+        },
+        "next": "security_audit"
+      },
+      "security_audit": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Audit the diff for security vulnerabilities: injection, authentication/authorization gaps, hardcoded secrets, unsafe deserialization, SSRF, path traversal, insecure use of dependencies, and similar OWASP-class issues. Write each finding to security_findings with the file, line, severity, and a description of the issue. If nothing is found, set security_findings to empty."
+        },
+        "next": "logic_audit"
+      },
+      "logic_audit": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Audit the same diff for logic and correctness issues: off-by-one errors, incorrect conditionals, missing or mishandled edge cases, race conditions, broken control flow, and incorrect state mutations. Write each finding to logic_findings with the file, line, severity, and a description of the issue. If nothing is found, set logic_findings to empty."
+        },
+        "next": "converge_findings"
+      },
+      "converge_findings": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Merge security_findings and logic_findings into converged_findings: remove duplicates and issues that are not actually actionable, and order what remains by severity (highest first). Set findings_present to true if converged_findings has at least one actionable issue, otherwise set it to false."
+        },
+        "next": "init_fix_state"
+      },
+      "init_fix_state": {
+        "type": "systemAction",
+        "settings": {
+          "action": "Initialize fix_iteration to 0, tests_passed to false, and test_output to empty for a fresh fix/test cycle."
+        },
+        "next": "apply_fixes",
+        "conditions": [
+          {
+            "condition": "findings_present is false",
+            "next": "run_tests"
+          }
+        ]
+      },
+      "apply_fixes": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Increment fix_iteration by 1. On the first pass, fix every issue listed in converged_findings with the minimal correct change for each. On a later pass (test_output is non-empty), instead fix whatever test_output says is failing. Do not make unrelated changes."
+        },
+        "next": "run_tests"
+      },
+      "run_tests": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Run the project's test suite. If every test passes, set tests_passed to true and clear test_output. Otherwise set tests_passed to false and write which tests failed and why into test_output, so the next fix pass knows exactly what to address."
+        },
+        "next": "apply_fixes",
+        "conditions": [
+          {
+            "condition": "tests_passed is true",
+            "next": "merge_pr"
+          },
+          {
+            "condition": "fix_iteration equals 3",
+            "next": "escalate_unresolved"
+          },
+          {
+            "condition": "fix_iteration exceeds 3",
+            "next": "escalate_unresolved"
+          }
+        ]
+      },
+      "merge_pr": {
+        "type": "agentAction",
+        "settings": {
+          "action": "The test suite passes. Merge pr_number (e.g. `gh pr merge <pr_number> --squash`), set merged to true, and post a summary of the converged findings that were fixed before merging."
+        }
+      },
+      "escalate_unresolved": {
+        "type": "agentAction",
+        "settings": {
+          "action": "The fix/test cycle cap (3 iterations) was reached without the test suite passing. Do not merge. Set merged to false and write an escalation report covering converged_findings, the fixes attempted across all iterations, and the last test_output, for a human to take over."
+        }
+      }
+    }
+  }
+}

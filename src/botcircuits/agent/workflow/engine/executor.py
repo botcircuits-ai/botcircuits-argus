@@ -95,7 +95,8 @@ def _invoke_step(
             f"Local workflow engine does not support step type {step_type!r} "
             f"(step {current_step_id!r}). Supported types: 'start', "
             f"'agentAction', 'question', 'systemAction'. To branch, put "
-            f"`conditions` on an agentAction."
+            f"`conditions` on an agentAction. 'listDecision' and 'parallel' "
+            f"require the segment-based runner (run_workflow_engine)."
         )
 
     return {"nextStep": next_step, "data": data}

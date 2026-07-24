@@ -714,3 +714,204 @@ def test_change_mention_matches_description_words():
         "i want to change pages", offer, variables)
     assert accepted == {"topic": "AI"}
     assert consume is False  # reply stays available for value extraction
+
+
+# -- parallel nodes: true-concurrency fan-out/join --------------------------
+
+
+def _parallel_flow(on_error: str | None = None) -> dict:
+    """start → fanout (parallel: credit | inventory(2 steps) | fraud) → finish."""
+    step = {
+        "type": "parallel",
+        "branches": {
+            "credit": ["check_credit"],
+            "inventory": ["check_inventory", "reserve_stock"],
+            "fraud": ["check_fraud"],
+        },
+        "next": "finish",
+    }
+    if on_error:
+        step["onError"] = on_error
+    steps = {
+        "start": {"type": "start", "next": "fanout"},
+        "fanout": step,
+        "check_credit": {"type": "agentAction",
+                          "settings": {"action": "check credit"}},
+        "check_inventory": {"type": "agentAction",
+                             "settings": {"action": "check inventory"},
+                             "next": "reserve_stock"},
+        "reserve_stock": {"type": "agentAction",
+                           "settings": {"action": "reserve stock"}},
+        "check_fraud": {"type": "agentAction",
+                         "settings": {"action": "check fraud"}},
+        "finish": {"type": "agentAction", "settings": {"action": "finish"}},
+    }
+    if on_error:
+        steps[on_error] = {"type": "agentAction",
+                            "settings": {"action": "handle failure"}}
+    return {"start": "start", "variables": [], "steps": steps}
+
+
+def test_compute_segments_isolates_parallel_step():
+    segs = compute_segments(_parallel_flow())
+    by_id = {s["id"]: s for s in segs}
+    fanout = by_id["fanout"]
+    assert fanout["steps"] == ["fanout"]
+    assert fanout["branchStep"] is None
+    parallel = fanout["parallel"]
+    assert set(parallel["branches"]) == {"credit", "inventory", "fraud"}
+    assert parallel["next"] == "finish"
+    # inventory's 2-step chain compiles into one inner segment (no branch).
+    inv_segs = parallel["branches"]["inventory"]
+    assert len(inv_segs) == 1
+    assert inv_segs[0]["steps"] == ["check_inventory", "reserve_stock"]
+    # "finish" is reachable as its own segment (queued from the parallel step).
+    assert "finish" in by_id
+
+
+def test_compute_segments_rejects_branch_with_conditions():
+    flow = _parallel_flow()
+    flow["steps"]["check_credit"]["choices"] = [{
+        "operator": "OR",
+        "expressionList": [{"variable": "x", "operator": "is", "value": "y"}],
+        "next": "finish",
+    }]
+    with pytest.raises(ValueError, match="credit"):
+        compute_segments(flow)
+
+
+def test_compute_segments_rejects_question_in_branch():
+    flow = _parallel_flow()
+    flow["steps"]["check_fraud"] = {"type": "question",
+                                     "settings": {"action": "fraud ok?"}}
+    with pytest.raises(ValueError, match="fraud"):
+        compute_segments(flow)
+
+
+def test_compute_segments_rejects_nested_parallel():
+    flow = _parallel_flow()
+    flow["steps"]["check_credit"] = {"type": "parallel", "branches": {
+        "x": ["check_fraud"]}, "next": "finish"}
+    with pytest.raises(ValueError, match="credit"):
+        compute_segments(flow)
+
+
+def _branch_run_segment(by_action: dict):
+    """A run_segment stub that looks up each action text a segment is asked
+    to perform in `by_action` and merges the matching `SegmentResult`s —
+    segments may bundle more than one step's action (e.g. a 2-step branch
+    chain with no internal branch point), so every match must contribute."""
+    async def run(*, actions, branch_variables, system_notes, slots, **kw):
+        merged_slots: dict = {}
+        matched = False
+        for a in actions:
+            result = by_action.get(a)
+            if result is None:
+                continue
+            matched = True
+            if result.paused:
+                return result
+            merged_slots.update(result.captured_slots)
+        if not matched:
+            return SegmentResult(text="ok", captured_slots={})
+        return SegmentResult(text="ok", captured_slots=merged_slots)
+    return run
+
+
+def test_parallel_all_branches_succeed_and_slots_merge():
+    run = _branch_run_segment({
+        "check credit": SegmentResult(captured_slots={"credit_ok": True}),
+        "check inventory": SegmentResult(captured_slots={"inv_seen": True}),
+        "reserve stock": SegmentResult(captured_slots={"inventory_ok": True}),
+        "check fraud": SegmentResult(captured_slots={"fraud_ok": True}),
+    })
+    res = asyncio.run(run_workflow_engine(
+        _built(_parallel_flow()), workflow_name="po", run_segment=run))
+    assert res.done and not res.paused
+    assert res.slots["credit_ok"] is True
+    assert res.slots["inventory_ok"] is True
+    assert res.slots["fraud_ok"] is True
+    assert res.slots["inv_seen"] is True
+    assert any(d.get("parallel") == "fanout" and d.get("status") == "ok"
+               for d in res.decisions)
+
+
+def test_parallel_branch_pause_fails_node_without_on_error():
+    from botcircuits.agent.workflow.engine.runner import WorkflowParallelError
+    run = _branch_run_segment({
+        "check credit": SegmentResult(captured_slots={"credit_ok": True}),
+        "check inventory": SegmentResult(captured_slots={"inv_seen": True}),
+        "reserve stock": SegmentResult(captured_slots={"inventory_ok": True}),
+        "check fraud": SegmentResult(paused=True, question="really?"),
+    })
+    with pytest.raises(WorkflowParallelError, match="fraud"):
+        asyncio.run(run_workflow_engine(
+            _built(_parallel_flow()), workflow_name="po", run_segment=run))
+
+
+def test_parallel_branch_pause_routes_to_on_error():
+    run = _branch_run_segment({
+        "check credit": SegmentResult(captured_slots={"credit_ok": True}),
+        "check fraud": SegmentResult(paused=True, question="really?"),
+    })
+    res = asyncio.run(run_workflow_engine(
+        _built(_parallel_flow(on_error="fraud_failed")),
+        workflow_name="po", run_segment=run))
+    assert res.done and not res.paused
+    # No partial merge: even the successful branches' slots are discarded.
+    assert "credit_ok" not in res.slots
+    assert "__parallel_error__" in res.slots
+
+
+def test_parallel_branch_exception_fails_node():
+    from botcircuits.agent.workflow.engine.runner import WorkflowParallelError
+
+    async def run(*, actions, branch_variables, system_notes, slots, **kw):
+        if "check inventory" in actions:
+            raise RuntimeError("boom")
+        return SegmentResult(captured_slots={})
+
+    with pytest.raises(WorkflowParallelError):
+        asyncio.run(run_workflow_engine(
+            _built(_parallel_flow()), workflow_name="po", run_segment=run))
+
+
+def test_parallel_slot_collision_across_branches_fails():
+    run = _branch_run_segment({
+        "check credit": SegmentResult(captured_slots={"status": "ok"}),
+        "check fraud": SegmentResult(captured_slots={"status": "flagged"}),
+    })
+    with pytest.raises(Exception, match="collision"):
+        asyncio.run(run_workflow_engine(
+            _built(_parallel_flow()), workflow_name="po", run_segment=run))
+
+
+def test_parallel_branches_run_concurrently():
+    """Branches must overlap in wall-clock time, not run one after another —
+    the whole point of `parallel` over a plain sequential chain. Only the
+    slowest branch's `check_inventory` step sleeps; if branches ran
+    sequentially the fast ones would fully finish (entered AND exited)
+    before it even entered."""
+    import time
+
+    entered_at: dict[str, float] = {}
+    exited_at: dict[str, float] = {}
+
+    async def run(*, actions, branch_variables, system_notes, slots, **kw):
+        name = actions[0] if actions else "?"
+        entered_at[name] = time.monotonic()
+        if name == "check inventory":
+            await asyncio.sleep(0.05)
+        exited_at[name] = time.monotonic()
+        return SegmentResult(captured_slots={})
+
+    asyncio.run(run_workflow_engine(
+        _built(_parallel_flow()), workflow_name="po", run_segment=run))
+
+    # All three branches must have STARTED before the slow one finished —
+    # proof the engine didn't wait for "check credit"/"check fraud" to fully
+    # complete before starting "check inventory".
+    branch_actions = {"check credit", "check inventory", "check fraud"}
+    assert branch_actions <= set(entered_at)
+    assert entered_at["check credit"] < exited_at["check inventory"]
+    assert entered_at["check fraud"] < exited_at["check inventory"]

@@ -106,7 +106,8 @@ Rules:
 - Step types: `start` (entry, no action), `agentAction` (the runtime performs
   `settings.action`), `question` (ask the user; `settings.action` is the
   question), `systemAction` (engine-side bookkeeping, no LLM), `listDecision`
-  (decide an outcome for **every item in a list** — see below).
+  (decide an outcome for **every item in a list** — see below), `parallel`
+  (run independent branches of work **concurrently** — see below).
 - Branching lives at the **step root** under `conditions` (sibling of
   `type`/`next`/`settings`, NOT inside `settings`). Each entry is
   `{"condition": "<NL test>", "next": "<step_id>"}`. The step's own `next` is
@@ -233,6 +234,46 @@ fulfilling an order's line items (one decision per item against stock):
 One `listDecision` replaces the entire `next_item`/`do_thing`/`record`/loop-back
 subgraph. The builder compiles its NL `conditions` into rule expressions just
 like any other step.
+
+## Running independent work concurrently — use `parallel`
+
+When the process explicitly says several checks/lookups should happen **at
+the same time** and don't depend on each other's output (e.g. "check credit
+and inventory and run a fraud check simultaneously"), use a `parallel` step
+instead of chaining them one after another. The engine runs every branch
+concurrently (real wall-clock parallelism, not just batched into one call)
+and waits for all of them before continuing:
+
+```json
+"fanout_checks": {
+  "type": "parallel",
+  "branches": {
+    "credit":    ["check_credit"],
+    "inventory": ["check_inventory", "reserve_stock"],
+    "fraud":     ["check_fraud"]
+  },
+  "next": "decide_outcome"
+}
+```
+
+`parallel` rules:
+- **`branches`** is a map of `name -> [step id, ...]`. Each list is a chain of
+  ordinary step ids already defined in `steps`, run in order, exactly like a
+  normal walk — a branch can be one step or several.
+- **A branch step must NOT branch or pause.** No `conditions`/`choices`, no
+  `question` step, and no nested `parallel` inside a branch chain — a branch
+  must run straight through to completion. `workflow build` rejects a branch
+  that violates this.
+- **All branches must finish before `next` runs.** There's no per-branch
+  `next` — the whole step rejoins at the ONE `next` on the `parallel` step
+  itself once every branch is done.
+- **Slot names written by different branches must not collide** with
+  different values — each branch should write to its own variable name(s)
+  (e.g. `credit_ok`, `inventory_ok`, `fraud_ok`) so results merge cleanly; two
+  branches disagreeing on the same variable fails the step.
+- Optional `onError`: a step id to route to if any branch fails (raises, or —
+  since branches can't pause — anything that would otherwise need a pause).
+  Omit it to let the failure propagate and surface as a run error.
 
 ## Editing
 
