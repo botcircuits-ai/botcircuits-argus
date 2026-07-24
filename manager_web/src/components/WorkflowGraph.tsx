@@ -831,6 +831,14 @@ function layoutWithDagre(nodes: Node[], edges: Edge[]): void {
     edgesep: 30,
     marginx: 30,
     marginy: 30,
+    // Default "network-simplex" packs every node as close to its parent's
+    // rank as the DAG allows — with a `parallel` step's uneven-depth
+    // branches plus an `onError` target, that wedges the error step and a
+    // short branch into the SAME rank, so the short branch's edge routes
+    // past/through the error node and their labels collide. "longest-path"
+    // pushes `onError` down to the join's rank instead — see the identical
+    // note in `TraceGraph.tsx`'s `layoutWithDagre`.
+    ranker: "longest-path",
   });
   g.setDefaultEdgeLabel(() => ({}));
   for (const n of nodes) g.setNode(n.id, { width: STEP_W, height: STEP_H });

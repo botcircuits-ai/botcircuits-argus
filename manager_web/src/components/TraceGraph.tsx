@@ -16,6 +16,7 @@ import ReactFlow, {
   type NodeProps,
 } from "reactflow";
 import "reactflow/dist/style.css";
+import { ForkIcon } from "@/components/icons";
 import type { ActionUsage, RunUsage, SessionDoc, TraceEvent } from "@/lib/api";
 import { fmtDuration, fmtTokens } from "@/lib/format";
 
@@ -32,6 +33,9 @@ import { fmtDuration, fmtTokens } from "@/lib/format";
 type StepNodeData = {
   label: string;
   kind?: string;
+  /** Set when this step is a member of some `parallel` step's branch chain —
+   * mirrors the same field in the authoring canvas's `StepNodeData`. */
+  branchOf?: { parallelStep: string; branch: string };
   durationMs: number | null;
   /** Real tokens this step billed, when the runtime reported usage. */
   usage?: ActionUsage | null;
@@ -42,6 +46,7 @@ type StepNodeData = {
 type SlotNodeData = { slots: Record<string, any>; edgeHighlighted?: boolean };
 
 function StepNode({ data }: NodeProps<StepNodeData>) {
+  const isParallel = data.kind === "parallel";
   return (
     <div
       className={[
@@ -56,9 +61,11 @@ function StepNode({ data }: NodeProps<StepNodeData>) {
           ? "border-2 bg-surface"
           : data.selected
             ? "border-2 border-brand ring-2 ring-brand/40 bg-surface"
-            : data.visited
-              ? "border border-border bg-surface"
-              : "border border-dashed border-muted/60 bg-elevated/40",
+            : isParallel
+              ? "border border-violet-400/60 dark:border-violet-500/50 bg-surface"
+              : data.visited
+                ? "border border-border bg-surface"
+                : "border border-dashed border-muted/60 bg-elevated/40",
       ].join(" ")}
       style={
         data.edgeHighlighted
@@ -68,17 +75,28 @@ function StepNode({ data }: NodeProps<StepNodeData>) {
     >
       <Handle type="target" position={Position.Top} className="!bg-muted" />
       <div className="flex items-center gap-1.5">
+        {isParallel && <ForkIcon className="w-3 h-3 text-violet-500 dark:text-violet-400 shrink-0" />}
         <span
-          className={`text-[11px] uppercase tracking-wide ${
-            data.visited ? "text-muted" : "text-muted/80"
-          }`}
+          className={
+            isParallel
+              ? "text-[11px] uppercase tracking-wide text-violet-600 dark:text-violet-400 font-medium"
+              : `text-[11px] uppercase tracking-wide ${data.visited ? "text-muted" : "text-muted/80"}`
+          }
         >
-          {data.kind === "start" ? "start" : "step"}
+          {data.kind === "start" ? "start" : isParallel ? "parallel" : "step"}
         </span>
+        {data.branchOf && (
+          <span
+            title={`Branch "${data.branchOf.branch}" of parallel step "${data.branchOf.parallelStep}"`}
+            className="inline-flex items-center rounded-full bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-medium text-violet-600 dark:text-violet-400 truncate max-w-[70px]"
+          >
+            {data.branchOf.branch}
+          </span>
+        )}
         {data.visited ? (
-          <span className="h-1.5 w-1.5 rounded-full bg-brand-500" title="entered" />
+          <span className="h-1.5 w-1.5 rounded-full bg-brand-500 ml-auto" title="entered" />
         ) : (
-          <span className="text-[10px] text-muted">· not run</span>
+          <span className="text-[10px] text-muted ml-auto">· not run</span>
         )}
       </div>
       <div
@@ -452,30 +470,64 @@ function buildGraph(
       takenNextByStep.set(ev.step, ((ev.data as any)?.chosen_next ?? null) as string | null);
     }
   }
-  // Per-step duration AND per-step token usage: attribute action_after data to
-  // the most recent step_enter (action events don't always carry a step id).
-  // Usage rides on `data.output.usage` (see runtime.trace_hooks); summed per
-  // step so a step driven by several action calls shows its combined cost.
+  // Per-step duration AND per-step token usage: attribute action_after data
+  // to the step(s) whose authored action text it ran (the event carries no
+  // step id — see `runtime/trace_hooks.py` — only `data.input.actions`).
+  // Matching by action text, rather than "most recent step_enter", is
+  // required once branches can run CONCURRENTLY (`parallel` steps): several
+  // step_enters fire before any of their action_afters arrive, so a single
+  // "most recent" pointer misattributes every concurrent branch's timing/
+  // tokens to whichever branch entered last. Usage rides on
+  // `data.output.usage` (see runtime.trace_hooks); summed per step so a step
+  // driven by several action calls shows its combined cost.
   const durByStep = new Map<string, number>();
   const usageByStep = new Map<string, ActionUsage>();
   {
+    const stepByAction = new Map<string, string>();
+    for (const [id, s] of Object.entries(graphSteps)) {
+      const action = (s?.action ?? "").trim();
+      if (action && !stepByAction.has(action)) stepByAction.set(action, id);
+    }
+    // Fallback for events with no matching action text (shouldn't happen for
+    // current traces, but keeps older/malformed ones from losing all timing
+    // data): most-recent-step_enter, same as before.
     let current: string | null = null;
     for (const ev of doc.trace) {
       if (ev.type === "step_enter" && ev.step) current = ev.step;
       if (ev.type !== "action_after") continue;
-      const k = ev.step ?? current;
-      if (!k) continue;
-      if (ev.duration_ms != null) {
-        durByStep.set(k, (durByStep.get(k) ?? 0) + ev.duration_ms);
-      }
+      const actedActions = ((ev.data as any)?.input?.actions ?? []) as string[];
+      const matched = actedActions
+        .map((a) => stepByAction.get((a || "").trim()))
+        .filter((id): id is string => !!id);
+      const targets = matched.length > 0 ? matched : current ? [current] : [];
+      if (targets.length === 0) continue;
       const u = (ev.data as any)?.output?.usage as ActionUsage | undefined;
-      if (u) usageByStep.set(k, mergeUsage(usageByStep.get(k), u));
+      for (const k of targets) {
+        if (ev.duration_ms != null) {
+          durByStep.set(k, (durByStep.get(k) ?? 0) + ev.duration_ms);
+        }
+        if (u) usageByStep.set(k, mergeUsage(usageByStep.get(k), u));
+      }
     }
   }
 
   if (!hasGraph) {
     // Fallback for old sessions: linear visited-steps chain (previous behavior).
     return fallbackGraph(doc, selectedStep, durByStep);
+  }
+
+  // Every step id claimed by some `parallel` step's branches — used both to
+  // badge the node (which parallel/branch it belongs to) and to skip it in
+  // the plain step→step edge pass below (branch membership draws its OWN
+  // edges via the dedicated `parallel` handling there instead). Mirrors
+  // `buildGraph` in the authoring canvas (`WorkflowGraph.tsx`).
+  const branchMembership = new Map<string, { parallelStep: string; branch: string }>();
+  for (const id of stepIds) {
+    const s = graphSteps[id];
+    if (s?.type !== "parallel") continue;
+    for (const [branch, chain] of Object.entries(s.branches ?? {})) {
+      for (const stepId of chain) branchMembership.set(stepId, { parallelStep: id, branch });
+    }
   }
 
   // --- step nodes (positions assigned by Dagre below) ---------------------
@@ -488,6 +540,7 @@ function buildGraph(
       data: {
         label: id,
         kind: s?.type,
+        branchOf: branchMembership.get(id),
         durationMs: durByStep.get(id) ?? null,
         usage: usageByStep.get(id) ?? null,
         visited: visited.has(id),
@@ -498,55 +551,95 @@ function buildGraph(
 
   // --- edges: every conditional + default, taken ones highlighted ---------
   const edges: Edge[] = [];
+  const addEdge = (
+    id: string,
+    to: string,
+    label: string | undefined,
+    isDefault: boolean,
+    isTaken: boolean,
+    color?: string,
+  ) => {
+    if (!graphSteps[to]) return;
+    const stroke = color ?? (isTaken ? "rgb(166 221 31)" : "rgb(var(--muted))");
+    edges.push({
+      id: `e:${id}->${to}:${label ?? "next"}`,
+      source: `step:${id}`,
+      target: `step:${to}`,
+      type: "smoothstep",
+      pathOptions: { borderRadius: 12 } as any,
+      label,
+      labelShowBg: true,
+      animated: isTaken,
+      markerEnd: { type: MarkerType.ArrowClosed, color: stroke },
+      style: {
+        // Inactive edges use the muted (zinc-500/400) color, not the faint
+        // border color, so they stay readable against the canvas.
+        stroke,
+        strokeWidth: isTaken ? 2.25 : 1.5,
+        strokeDasharray: isDefault ? "5 4" : undefined,
+        opacity: isTaken ? 1 : 0.85,
+      },
+      labelStyle: { fill: "rgb(var(--fg))", fontSize: 10, fontWeight: 500 },
+      labelBgStyle: {
+        fill: "rgb(var(--elevated))",
+        fillOpacity: 1,
+        stroke: "rgb(var(--border))",
+      },
+      labelBgPadding: [5, 3],
+      labelBgBorderRadius: 4,
+    });
+  };
+
   for (const id of stepIds) {
     const s = graphSteps[id];
+
+    if (s?.type === "parallel") {
+      // Fan-out / branch-chain / join edges — derived from `branches`, never
+      // from `choices`/`next` (a parallel step has no branch event; "taken"
+      // just means both endpoints were entered, same as a plain default edge).
+      for (const [branch, chain] of Object.entries(s.branches ?? {})) {
+        const validChain = chain.filter((sid) => graphSteps[sid]);
+        if (!validChain.length) continue;
+        addEdge(id, validChain[0], branch, false, visited.has(id) && visited.has(validChain[0]),
+          visited.has(id) && visited.has(validChain[0]) ? "rgb(167 139 250)" : undefined);
+        for (let i = 0; i < validChain.length - 1; i++) {
+          const a = validChain[i], b = validChain[i + 1];
+          addEdge(a, b, undefined, false, visited.has(a) && visited.has(b),
+            visited.has(a) && visited.has(b) ? "rgb(167 139 250)" : "rgb(167 139 250 / 0.6)");
+        }
+        const last = validChain[validChain.length - 1];
+        if (s.next) {
+          addEdge(last, s.next, "join", false, visited.has(last) && visited.has(s.next),
+            visited.has(last) && visited.has(s.next) ? "rgb(167 139 250)" : undefined);
+        }
+      }
+      if (s.onError && graphSteps[s.onError]) {
+        const errTaken = visited.has(id) && visited.has(s.onError);
+        addEdge(id, s.onError, "on error", true, errTaken, errTaken ? "rgb(248 113 113)" : undefined);
+      }
+      continue;
+    }
+
+    // A step inside some branch chain gets its edges from the `parallel`
+    // pass above, not here (mirrors the authoring canvas's `buildGraph`).
+    if (branchMembership.has(id)) continue;
+
     const taken = takenNextByStep.get(id);
     const defaultNext = s?.next ?? null;
-
-    const addEdge = (to: string, label: string | undefined, isDefault: boolean) => {
-      if (!graphSteps[to]) return;
-      const isTaken =
-        (taken !== undefined && taken === to) ||
-        // No branch event (non-branch step): the static default edge between
-        // two visited steps counts as taken.
-        (taken === undefined && isDefault && visited.has(id) && visited.has(to));
-      edges.push({
-        id: `e:${id}->${to}:${label ?? "next"}`,
-        source: `step:${id}`,
-        target: `step:${to}`,
-        type: "smoothstep",
-        pathOptions: { borderRadius: 12 } as any,
-        label,
-        labelShowBg: true,
-        animated: isTaken,
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          color: isTaken ? "rgb(166 221 31)" : "rgb(var(--muted))",
-        },
-        style: {
-          // Inactive edges use the muted (zinc-500/400) color, not the faint
-          // border color, so they stay readable against the canvas.
-          stroke: isTaken ? "rgb(166 221 31)" : "rgb(var(--muted))",
-          strokeWidth: isTaken ? 2.25 : 1.5,
-          strokeDasharray: isDefault && (s?.choices?.length ?? 0) > 0 ? "5 4" : undefined,
-          opacity: isTaken ? 1 : 0.85,
-        },
-        labelStyle: { fill: "rgb(var(--fg))", fontSize: 10, fontWeight: 500 },
-        labelBgStyle: {
-          fill: "rgb(var(--elevated))",
-          fillOpacity: 1,
-          stroke: "rgb(var(--border))",
-        },
-        labelBgPadding: [5, 3],
-        labelBgBorderRadius: 4,
-      });
-    };
+    const isTakenTo = (to: string, isDefault: boolean) =>
+      (taken !== undefined && taken === to) ||
+      // No branch event (non-branch step): the static default edge between
+      // two visited steps counts as taken.
+      (taken === undefined && isDefault && visited.has(id) && visited.has(to));
 
     (s?.choices ?? []).forEach((c) => {
-      if (c.next) addEdge(c.next, condLabel(c.condition), false);
+      if (c.next) addEdge(id, c.next, condLabel(c.condition), false, isTakenTo(c.next, false));
     });
     if (defaultNext) {
-      addEdge(defaultNext, (s?.choices?.length ?? 0) > 0 ? "otherwise" : undefined, true);
+      addEdge(
+        id, defaultNext, (s?.choices?.length ?? 0) > 0 ? "otherwise" : undefined, true,
+        isTakenTo(defaultNext, true),
+      );
     }
   }
 
@@ -618,6 +711,17 @@ function layoutWithDagre(nodes: Node[], edges: Edge[]): void {
     edgesep: 30, // gap between parallel edges
     marginx: 30,
     marginy: 30,
+    // The default "network-simplex" ranker packs every node as close to its
+    // parent's rank as the DAG allows — with a `parallel` step's uneven-depth
+    // branches (e.g. a 1-step branch alongside a 2-step one) PLUS an
+    // `onError` target, that packs the short branch and the error step into
+    // the SAME rank, so the short branch's edge has to route past/through
+    // the error step and their labels visually collide. "longest-path" ranks
+    // every node as far from the root as its longest incoming path allows,
+    // which pushes `onError` down to the same rank as the eventual join
+    // instead of wedging it between branch ranks — same total layout cost,
+    // no more crossing.
+    ranker: "longest-path",
   });
   g.setDefaultEdgeLabel(() => ({}));
 

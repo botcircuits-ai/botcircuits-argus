@@ -80,6 +80,12 @@ export type FlowStep = {
   action?: string;
   next?: string | null;
   choices?: FlowChoice[];
+  /** `type: "parallel"` only — named branches, each an ordered chain of step
+   * ids run concurrently (mirrors `WorkflowStep.branches`, carried through
+   * `_flow_graph` on the backend so the trace view can draw them). */
+  branches?: Record<string, string[]>;
+  /** `type: "parallel"` only — step id to route to if any branch fails. */
+  onError?: string | null;
 };
 export type FlowGraph = {
   start?: string | null;

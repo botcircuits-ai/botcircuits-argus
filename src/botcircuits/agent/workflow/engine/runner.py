@@ -165,6 +165,7 @@ async def _run_branch_chain(
     flow: dict,
     run_segment: SegmentRunner,
     slots: dict[str, Any],
+    event_sink: Callable[[str, Any], Awaitable[None]] | None,
 ) -> tuple[dict[str, Any], list["ActionUsage"]]:
     """Run one `parallel` branch's pre-compiled segment chain to completion
     against its OWN slot snapshot (never the shared `slots` dict — branches
@@ -183,6 +184,19 @@ async def _run_branch_chain(
     try:
         for seg in branch_segments:
             actions = _action_texts(flow, seg.get("steps") or [], branch_slots)
+            # Observability: mirror the main loop's per-segment `step_enter`
+            # emission (runner.py's own `while current is not None:` loop) so
+            # a branch's inner steps show as "entered" in the trace view —
+            # without this a branch's steps run for real (and their output
+            # feeds the join) but the trace shows them as "not run", which
+            # reads as a bug even though nothing failed.
+            await _emit(event_sink, "step_enter", {
+                "step": seg.get("id"),
+                "steps": list(seg.get("steps") or []),
+                "actions": list(actions),
+                "slots": dict(branch_slots),
+                "branch": branch_name,
+            })
             seg_kwargs: dict[str, Any] = {}
             if data_variables:
                 seg_kwargs["data_variables"] = data_variables
@@ -246,7 +260,7 @@ async def _run_parallel_branches(
     coros = [
         _run_branch_chain(
             name, branches[name], flow=flow, run_segment=run_segment,
-            slots=slots,
+            slots=slots, event_sink=event_sink,
         )
         for name in names
     ]

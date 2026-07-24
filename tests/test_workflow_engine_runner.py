@@ -915,3 +915,38 @@ def test_parallel_branches_run_concurrently():
     assert branch_actions <= set(entered_at)
     assert entered_at["check credit"] < exited_at["check inventory"]
     assert entered_at["check fraud"] < exited_at["check inventory"]
+
+
+def test_parallel_branches_emit_step_enter_for_observability():
+    """Each branch's inner segment must emit its own `step_enter` event —
+    without this, a branch's steps run for real (their output feeds the
+    join) but the trace/tracing view shows them as "not run" since nothing
+    ever announced the engine entered them (the lookup_order→not_found-only
+    bug's parallel-step cousin)."""
+    run = _branch_run_segment({
+        "check credit": SegmentResult(captured_slots={"credit_ok": True}),
+        "check inventory": SegmentResult(captured_slots={}),
+        "reserve stock": SegmentResult(captured_slots={}),
+        "check fraud": SegmentResult(captured_slots={}),
+    })
+
+    events: list[tuple[str, dict]] = []
+
+    async def sink(kind, payload):
+        events.append((kind, payload))
+
+    asyncio.run(run_workflow_engine(
+        _built(_parallel_flow()), workflow_name="po", run_segment=run,
+        event_sink=sink,
+    ))
+
+    step_enters = [p for k, p in events if k == "step_enter"]
+    entered_steps = {sid for p in step_enters for sid in p.get("steps", [])}
+    # Every branch step (including the 2-step inventory chain) got its own
+    # step_enter — not just the parallel step itself.
+    assert {"check_credit", "check_inventory", "reserve_stock", "check_fraud"} <= entered_steps
+    # The branch name rides along so a tracer could group by branch if it
+    # wants to (not required today, but must not silently vanish).
+    branch_tagged = {p["step"]: p.get("branch") for p in step_enters if p.get("branch")}
+    assert branch_tagged.get("check_credit") == "credit"
+    assert branch_tagged.get("check_fraud") == "fraud"
