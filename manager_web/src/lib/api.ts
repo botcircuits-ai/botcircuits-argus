@@ -102,10 +102,13 @@ export type SessionDoc = {
 
 // --- Workflow authoring types ----------------------------------------------
 
-/** The shared step-type constant. Today only `agentAction` is supported in the
- * UI editor; more step types (question, systemAction, …) come later. */
-export const SUPPORTED_STEP_TYPES = ["agentAction"] as const;
+/** The shared step-type constant. `agentAction` is the general-purpose step;
+ * `parallel` runs several branch step-chains concurrently and joins on a
+ * single `next`. More step types (question, systemAction, listDecision) are
+ * still CLI/skill-authored only — not editable in this UI yet. */
+export const SUPPORTED_STEP_TYPES = ["agentAction", "parallel"] as const;
 export const STEP_TYPE_AGENT_ACTION = "agentAction";
+export const STEP_TYPE_PARALLEL = "parallel";
 
 export type WorkflowCondition = { condition: string; next: string };
 
@@ -120,6 +123,15 @@ export type WorkflowStep = {
    * step to a different model/runtime than the run's default. Omitted (or
    * unset) means the run default. */
   agent?: string;
+  /** `type: "parallel"` only — named branches, each an ordered chain of step
+   * ids (already defined elsewhere in `flow.steps`) run concurrently. Every
+   * branch must finish before the step's own `next` runs; a branch step must
+   * not carry `conditions`, be a `question`, or itself be `parallel` (the
+   * backend enforces this at build time). */
+  branches?: Record<string, string[]>;
+  /** `type: "parallel"` only — step id to route to if any branch fails.
+   * Omitted means a failure propagates as a run error. */
+  onError?: string | null;
   [k: string]: unknown;
 };
 

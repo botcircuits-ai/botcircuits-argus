@@ -23,6 +23,7 @@ import ReactFlow, {
   type OnConnectStartParams,
 } from "reactflow";
 import "reactflow/dist/style.css";
+import { ForkIcon } from "@/components/icons";
 import type { WorkflowDoc, WorkflowStep } from "@/lib/api";
 
 /**
@@ -40,7 +41,29 @@ import type { WorkflowDoc, WorkflowStep } from "@/lib/api";
  * the single source of truth and the JSON view stays in sync.
  */
 
-type EdgeKind = "default" | "condition";
+export type EdgeKind =
+  | "default"
+  | "condition"
+  // `parallel`-step edges (never authored via `conditions`/`next` — derived
+  // from a step's `branches`/`onError` fields):
+  //   parallelFanout: the parallel step -> a branch's first step
+  //   branchChain:    consecutive steps within one branch's chain
+  //   branchJoin:     a branch's last step -> the parallel step's own `next`
+  //   onError:        the parallel step -> its `onError` step
+  | "parallelFanout"
+  | "branchChain"
+  | "branchJoin"
+  | "onError";
+
+/** Edge kinds derived from a `parallel` step's `branches`/`onError` — never
+ * backed by `conditions[]`, so their label is read-only (branch name / "join"
+ * / "on error") rather than an editable condition input. */
+const PARALLEL_EDGE_KINDS = new Set<EdgeKind>([
+  "parallelFanout",
+  "branchChain",
+  "branchJoin",
+  "onError",
+]);
 
 type StepNodeData = {
   label: string;
@@ -49,6 +72,10 @@ type StepNodeData = {
   /** Name of the `doc.agents` entry this step is pinned to, if any — shown
    * as a small badge so a different-model step stands out on the canvas. */
   agent?: string;
+  /** Set when this step is a member of some `parallel` step's branch chain —
+   * `{parallelStep, branch}` — so the node can carry a small badge naming
+   * which fan-out/branch it belongs to. */
+  branchOf?: { parallelStep: string; branch: string };
   selected: boolean;
   isStart: boolean;
   edgeHighlighted?: boolean;
@@ -73,6 +100,8 @@ function StepNode({ data, id }: NodeProps<StepNodeData>) {
     else setNameDraft(data.label);
   };
 
+  const isParallel = data.kind === "parallel";
+
   return (
     <div
       onClick={() => data.onSelect(data.label)}
@@ -82,7 +111,9 @@ function StepNode({ data, id }: NodeProps<StepNodeData>) {
           ? "border-2"
           : data.selected
             ? "border-2 border-brand ring-2 ring-brand/40"
-            : "border-border",
+            : isParallel
+              ? "border-violet-400/60 dark:border-violet-500/50"
+              : "border-border",
       ].join(" ")}
       style={
         data.edgeHighlighted
@@ -94,9 +125,23 @@ function StepNode({ data, id }: NodeProps<StepNodeData>) {
           target, so a connection can be drawn from either node's handle. */}
       <Handle type="target" position={Position.Top} className="!bg-muted !w-3 !h-3" />
       <div className="flex items-center gap-1.5">
-        <span className="text-[11px] uppercase tracking-wide text-muted">
+        {isParallel && <ForkIcon className="w-3 h-3 text-violet-500 dark:text-violet-400 shrink-0" />}
+        <span
+          className={[
+            "text-[11px] uppercase tracking-wide",
+            isParallel ? "text-violet-600 dark:text-violet-400 font-medium" : "text-muted",
+          ].join(" ")}
+        >
           {data.isStart ? "start" : data.kind || "step"}
         </span>
+        {data.branchOf && (
+          <span
+            title={`Branch "${data.branchOf.branch}" of parallel step "${data.branchOf.parallelStep}"`}
+            className="inline-flex items-center rounded-full bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-medium text-violet-600 dark:text-violet-400 truncate max-w-[90px]"
+          >
+            {data.branchOf.branch}
+          </span>
+        )}
         {data.agent && (
           <span
             title={`Runs on the "${data.agent}" agent`}
@@ -136,7 +181,7 @@ function StepNode({ data, id }: NodeProps<StepNodeData>) {
         </div>
       )}
 
-      {!data.isStart && (
+      {!data.isStart && !isParallel && (
         <textarea
           value={actionDraft}
           onChange={(e) => setActionDraft(e.target.value)}
@@ -149,6 +194,11 @@ function StepNode({ data, id }: NodeProps<StepNodeData>) {
           placeholder="action prompt…"
           className="nodrag nowheel mt-1 w-full resize-none rounded border border-border bg-bg px-1.5 py-1 text-[11px] leading-snug text-fg placeholder:text-muted focus:outline-none focus:ring-1 focus:ring-brand/40"
         />
+      )}
+      {isParallel && (
+        <p className="mt-1 text-[11px] leading-snug text-muted">
+          Branches edited in the side panel — drag from here to add one.
+        </p>
       )}
 
       <Handle type="source" position={Position.Bottom} className="!bg-brand-500 !w-3 !h-3" />
@@ -415,6 +465,10 @@ function ContextMenu({
   }, [onClose]);
 
   const isStartNode = menu.kind === "node" && menu.isStart;
+  // A mid-branch chain link can't be deleted standalone — splicing the chain
+  // isn't supported for v1; delete one of the two steps instead (which
+  // reconnects the chain automatically — see `confirmDeleteStep`).
+  const isUndeletableEdge = menu.kind === "edge" && menu.ref.kind === "branchChain";
 
   return (
     <div
@@ -433,10 +487,20 @@ function ContextMenu({
         </button>
       ) : (
         <button
+          disabled={isUndeletableEdge}
           onClick={() => onDeleteEdge(menu.ref)}
-          className="w-full text-left px-3 py-1.5 text-sm text-danger hover:bg-danger/10"
+          className="w-full text-left px-3 py-1.5 text-sm text-danger hover:bg-danger/10 disabled:opacity-40 disabled:hover:bg-transparent"
+          title={
+            isUndeletableEdge
+              ? "Delete one of the two steps instead — a branch chain link can't be removed on its own"
+              : undefined
+          }
         >
-          Delete connection
+          {menu.ref.kind === "parallelFanout"
+            ? "Remove branch"
+            : menu.ref.kind === "onError"
+              ? "Clear on-error route"
+              : "Delete connection"}
         </button>
       )}
     </div>
@@ -462,6 +526,21 @@ function buildGraph(
   const start = doc.flow?.start ?? "start";
   const ids = Object.keys(steps);
 
+  // Every step id that's a member of some `parallel` step's branch chain,
+  // mapped to which parallel step + branch name it belongs to — used both to
+  // badge the node and to skip it in the plain `next`/`conditions` edge pass
+  // below (branch membership draws its OWN edges, not the generic ones).
+  const branchMembership = new Map<string, { parallelStep: string; branch: string }>();
+  for (const id of ids) {
+    const s = steps[id];
+    if (s?.type !== "parallel") continue;
+    for (const [branch, chain] of Object.entries(s.branches ?? {})) {
+      for (const stepId of chain) {
+        branchMembership.set(stepId, { parallelStep: id, branch });
+      }
+    }
+  }
+
   const nodes: Node[] = ids.map((id) => {
     const s: WorkflowStep = steps[id] ?? {};
     return {
@@ -473,6 +552,7 @@ function buildGraph(
         kind: s.type,
         action: s.settings?.action,
         agent: s.agent,
+        branchOf: branchMembership.get(id),
         selected: selectedStep === id,
         isStart: id === start || s.type === "start",
         onSelect: cb.onSelect,
@@ -485,6 +565,45 @@ function buildGraph(
   const edges: Edge[] = [];
   for (const id of ids) {
     const s = steps[id] ?? {};
+
+    if (s.type === "parallel") {
+      for (const [branch, chain] of Object.entries(s.branches ?? {})) {
+        const validChain = chain.filter((sid) => steps[sid]);
+        if (!validChain.length) continue;
+        // Fan-out: the parallel step -> this branch's first step. Labeled
+        // with the branch name (read-only — not a `conditions[]` entry).
+        edges.push(
+          makeEdge(id, validChain[0], branch, "parallelFanout", -1, cb.onUpdateEdgeCondition),
+        );
+        // Chain edges between consecutive steps within the branch.
+        for (let i = 0; i < validChain.length - 1; i++) {
+          edges.push(
+            makeEdge(validChain[i], validChain[i + 1], "", "branchChain", i, cb.onUpdateEdgeCondition),
+          );
+        }
+        // Join: the branch's last step -> the parallel step's own `next`,
+        // once every branch has finished.
+        const last = validChain[validChain.length - 1];
+        if (s.next && steps[s.next]) {
+          edges.push(
+            makeEdge(last, s.next, "join", "branchJoin", -1, cb.onUpdateEdgeCondition),
+          );
+        }
+      }
+      if (s.onError && steps[s.onError]) {
+        edges.push(
+          makeEdge(id, s.onError, "on error", "onError", -1, cb.onUpdateEdgeCondition),
+        );
+      }
+      // A parallel step's `next` only takes effect via the per-branch join
+      // edges above — it never gets a direct edge of its own.
+      continue;
+    }
+
+    // Steps that are themselves inside a branch chain get their `next`/
+    // `conditions` from the branch-chain/join edges above, not here (a
+    // branch step is validated build-time to carry neither anyway).
+    if (branchMembership.has(id)) continue;
 
     (s.conditions ?? []).forEach((c, idx) => {
       if (!c.next || !steps[c.next]) return;
@@ -515,6 +634,12 @@ type ConditionEdgeData = {
   onUpdate: (from: string, kind: EdgeKind, condIndex: number, condition: string) => void;
 };
 
+/** Violet accent for every `parallel`-derived edge kind (fan-out, branch
+ * chain, join), matching the violet node accent in `StepNode`. `onError`
+ * gets the danger color and a dashed stroke — it's the exceptional path. */
+const PARALLEL_EDGE_COLOR = "rgb(167, 139, 250)"; // violet-400
+const ON_ERROR_EDGE_COLOR = "rgb(248, 113, 113)"; // red-400
+
 function makeEdge(
   from: string,
   to: string,
@@ -524,16 +649,23 @@ function makeEdge(
   onUpdate: (from: string, kind: EdgeKind, condIndex: number, condition: string) => void,
 ): Edge<ConditionEdgeData> {
   const isDefault = kind === "default";
+  const isOnError = kind === "onError";
+  const isBranch = PARALLEL_EDGE_KINDS.has(kind) && !isOnError;
+  const color = isOnError
+    ? ON_ERROR_EDGE_COLOR
+    : isBranch
+      ? PARALLEL_EDGE_COLOR
+      : "rgb(var(--muted))";
   return {
     id: `e:${from}->${to}:${kind}:${condIndex}`,
     source: `step:${from}`,
     target: `step:${to}`,
     type: "condition",
-    markerEnd: { type: MarkerType.ArrowClosed, color: "rgb(var(--muted))" },
+    markerEnd: { type: MarkerType.ArrowClosed, color },
     style: {
-      stroke: "rgb(var(--muted))",
-      strokeWidth: 1.6,
-      strokeDasharray: isDefault ? "5 4" : undefined,
+      stroke: color,
+      strokeWidth: isBranch || isOnError ? 1.8 : 1.6,
+      strokeDasharray: isDefault || isOnError ? "5 4" : undefined,
       opacity: 0.9,
     },
     data: { from, to, kind, condIndex, condition, onUpdate },
@@ -565,6 +697,8 @@ function ConditionEdge({
     borderRadius: 12,
   });
 
+  const isParallelEdge = data && PARALLEL_EDGE_KINDS.has(data.kind);
+
   return (
     <>
       <BaseEdge id={id} path={path} markerEnd={markerEnd} style={style} />
@@ -578,15 +712,40 @@ function ConditionEdge({
               pointerEvents: "all",
             }}
           >
-            <EdgeConditionInput
-              value={data.condition}
-              isDefault={data.kind === "default"}
-              onCommit={(v) => data.onUpdate(data.from, data.kind, data.condIndex, v)}
-            />
+            {isParallelEdge ? (
+              <ParallelEdgeLabel kind={data.kind} text={data.condition} />
+            ) : (
+              <EdgeConditionInput
+                value={data.condition}
+                isDefault={data.kind === "default"}
+                onCommit={(v) => data.onUpdate(data.from, data.kind, data.condIndex, v)}
+              />
+            )}
           </div>
         </EdgeLabelRenderer>
       )}
     </>
+  );
+}
+
+/** Static (non-editable) label for a `parallel`-derived edge — a branch
+ * name, "join", or "on error". These aren't backed by `conditions[]`, so
+ * unlike `EdgeConditionInput` there's nothing to click into and edit here;
+ * the branch itself is renamed/removed from the Step settings panel. */
+function ParallelEdgeLabel({ kind, text }: { kind: EdgeKind; text: string }) {
+  if (kind === "branchChain" || !text) return null;
+  const isOnError = kind === "onError";
+  return (
+    <span
+      className={[
+        "rounded px-1.5 py-0.5 text-[10px] font-medium border",
+        isOnError
+          ? "border-danger/40 bg-danger/10 text-danger"
+          : "border-violet-400/40 bg-violet-500/10 text-violet-600 dark:text-violet-400",
+      ].join(" ")}
+    >
+      {text}
+    </span>
   );
 }
 

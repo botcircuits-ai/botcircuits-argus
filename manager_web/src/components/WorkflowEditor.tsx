@@ -5,11 +5,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AuthoringChat } from "@/components/AuthoringChat";
 import { StepPanel } from "@/components/StepPanel";
-import { WorkflowGraph, type EdgeRef } from "@/components/WorkflowGraph";
+import { WorkflowGraph, type EdgeKind, type EdgeRef } from "@/components/WorkflowGraph";
 import { CodeIcon, SparkleIcon, WorkflowIcon } from "@/components/icons";
 import {
   api,
   STEP_TYPE_AGENT_ACTION,
+  STEP_TYPE_PARALLEL,
   type BuildResult,
   type WorkflowDoc,
   type WorkflowStep,
@@ -24,14 +25,35 @@ type Mode = "flow" | "json";
  * single condition whose test is empty, that lone connection is really the
  * default path — promote it to `next` and drop the empty `conditions`. Keeps
  * the model honest after edits that leave a step with one unconditioned edge.
+ *
+ * A `parallel` step has no `conditions` at all (its branches ARE the
+ * multi-way fan-out) — never apply this collapse to one.
  */
 function normalizeStep(step: WorkflowStep): void {
-  if (!step) return;
+  if (!step || step.type === STEP_TYPE_PARALLEL) return;
   const conditions = step.conditions ?? [];
   if (!step.next && conditions.length === 1 && !(conditions[0].condition ?? "").trim()) {
     step.next = conditions[0].next;
     delete step.conditions;
   }
+}
+
+/** Every step id claimed by some `parallel` step's branches, mapped to
+ * `{parallelStep, branch, index}` — the step's position within that branch's
+ * chain. Used by the connect/rename/delete handlers below to route a
+ * mutation into `branches` instead of `next`/`conditions` when the step in
+ * question is part of a fan-out. */
+function branchIndex(
+  steps: Record<string, WorkflowStep>,
+): Map<string, { parallelStep: string; branch: string; index: number }> {
+  const idx = new Map<string, { parallelStep: string; branch: string; index: number }>();
+  for (const [id, s] of Object.entries(steps)) {
+    if (s.type !== STEP_TYPE_PARALLEL) continue;
+    for (const [branch, chain] of Object.entries(s.branches ?? {})) {
+      chain.forEach((stepId, index) => idx.set(stepId, { parallelStep: id, branch, index }));
+    }
+  }
+  return idx;
 }
 
 function emptyDoc(name: string): WorkflowDoc {
@@ -173,9 +195,17 @@ export function WorkflowEditor({
       nextSteps[newId] = { ...old, id: newId };
       for (const v of Object.values(nextSteps)) {
         if (v.next === oldId) v.next = newId;
+        if (v.onError === oldId) v.onError = newId;
         if (v.conditions)
           v.conditions = v.conditions.map((c) =>
             c.next === oldId ? { ...c, next: newId } : c,
+          );
+        if (v.branches)
+          v.branches = Object.fromEntries(
+            Object.entries(v.branches).map(([branch, chain]) => [
+              branch,
+              chain.map((sid) => (sid === oldId ? newId : sid)),
+            ]),
           );
       }
       const start = doc.flow?.start === oldId ? newId : doc.flow?.start;
@@ -194,7 +224,12 @@ export function WorkflowEditor({
   );
 
   const updateEdgeCondition = useCallback(
-    (from: string, kind: "default" | "condition", condIndex: number, condition: string) => {
+    (from: string, kind: EdgeKind, condIndex: number, condition: string) => {
+      // `parallel`-derived edges (fan-out/branch chain/join/onError) are
+      // read-only labels — `ConditionEdge` renders `ParallelEdgeLabel` for
+      // them instead of an editable `EdgeConditionInput`, so this callback
+      // should never actually fire for those kinds. No-op defensively.
+      if (kind !== "condition" && kind !== "default") return;
       mutateSteps((s) => {
         const step = s[from];
         if (!step) return;
@@ -218,9 +253,59 @@ export function WorkflowEditor({
 
   // Connect two existing steps: fill the default `next` if empty, otherwise add
   // a new (empty-condition) branch the user can then label inline.
+  // Ambiguous "connect from a parallel step with 2+ empty branches" case:
+  // holds the pending (from, to) pair while the user picks which branch.
+  const [pendingBranchPick, setPendingBranchPick] = useState<
+    { parallelStep: string; to: string; emptyBranches: string[] } | null
+  >(null);
+
+  /** Append `stepId` to `branches[branch]` on the given parallel step. */
+  const appendToBranch = useCallback(
+    (parallelStep: string, branch: string, stepId: string) => {
+      mutateSteps((s) => {
+        const step = s[parallelStep];
+        if (!step) return;
+        const branches = { ...(step.branches ?? {}) };
+        branches[branch] = [...(branches[branch] ?? []), stepId];
+        s[parallelStep] = { ...step, branches };
+      });
+    },
+    [mutateSteps],
+  );
+
   const connectSteps = useCallback(
     (from: string, to: string) => {
       if (from === to) return;
+      const cur = doc.flow?.steps ?? {};
+      const fromStep = cur[from];
+      if (!fromStep || !cur[to]) return;
+
+      // Dragging FROM a parallel step: route into `branches`, not `next`.
+      if (fromStep.type === STEP_TYPE_PARALLEL) {
+        const branches = fromStep.branches ?? {};
+        const already = Object.values(branches).some((chain) => chain.includes(to));
+        if (already) return; // already wired into some branch
+        const empty = Object.keys(branches).filter((b) => (branches[b] ?? []).length === 0);
+        if (empty.length === 1) {
+          appendToBranch(from, empty[0], to);
+        } else if (empty.length > 1) {
+          setPendingBranchPick({ parallelStep: from, to, emptyBranches: empty });
+        } else {
+          // No empty branch to fill — create a new one named after `to`.
+          appendToBranch(from, to, to);
+        }
+        return;
+      }
+
+      // Dragging FROM a step that's already the LAST step of some branch
+      // chain: extend that chain instead of setting `next`/`conditions` (a
+      // branch step is validated build-time to carry neither).
+      const idx = branchIndex(cur).get(from);
+      if (idx && idx.index === (cur[idx.parallelStep]?.branches?.[idx.branch]?.length ?? 0) - 1) {
+        appendToBranch(idx.parallelStep, idx.branch, to);
+        return;
+      }
+
       mutateSteps((s) => {
         const step = s[from];
         if (!step || !s[to]) return;
@@ -237,7 +322,17 @@ export function WorkflowEditor({
         }
       });
     },
-    [mutateSteps],
+    [doc, mutateSteps, appendToBranch],
+  );
+
+  const pickBranch = useCallback(
+    (branch: string) => {
+      const pick = pendingBranchPick;
+      setPendingBranchPick(null);
+      if (!pick) return;
+      appendToBranch(pick.parallelStep, branch, pick.to);
+    },
+    [pendingBranchPick, appendToBranch],
   );
 
   // Drag ended on empty canvas — ask before creating.
@@ -251,8 +346,36 @@ export function WorkflowEditor({
     let n = Object.keys(cur).length + 1;
     let id = `step_${n}`;
     while (cur[id]) id = `step_${++n}`;
+    const fromStep = cur[from];
+    const idx = branchIndex(cur).get(from);
+
     mutateSteps((s) => {
       s[id] = { type: STEP_TYPE_AGENT_ACTION, settings: { action: "" }, next: "", id };
+
+      if (fromStep?.type === STEP_TYPE_PARALLEL) {
+        // New step becomes a brand-new branch (named after itself) unless
+        // there's exactly one empty branch to fill — ambiguity here (2+
+        // empty branches) isn't expected from an empty-canvas drop, since
+        // that flow always creates a FRESH step rather than reusing one.
+        const branches = { ...(fromStep.branches ?? {}) };
+        const empty = Object.keys(branches).filter((b) => (branches[b] ?? []).length === 0);
+        const branch = empty[0] ?? id;
+        branches[branch] = [...(branches[branch] ?? []), id];
+        s[from] = { ...fromStep, branches };
+        return;
+      }
+
+      if (idx && idx.index === (fromStep?.branches?.[idx.branch]?.length ?? 0) - 1) {
+        // `from` is the last step of a branch chain — extend it.
+        const parallelStep = s[idx.parallelStep];
+        if (parallelStep) {
+          const branches = { ...(parallelStep.branches ?? {}) };
+          branches[idx.branch] = [...(branches[idx.branch] ?? []), id];
+          s[idx.parallelStep] = { ...parallelStep, branches };
+        }
+        return;
+      }
+
       const step = s[from];
       if (step) {
         if (!step.next) s[from] = { ...step, next: id };
@@ -275,7 +398,21 @@ export function WorkflowEditor({
       // Clear dangling references so the graph/build stay consistent.
       for (const v of Object.values(s)) {
         if (v.next === id) v.next = "";
+        if (v.onError === id) v.onError = undefined;
         if (v.conditions) v.conditions = v.conditions.filter((c) => c.next !== id);
+        if (v.type === STEP_TYPE_PARALLEL && v.branches) {
+          // Splice the deleted step out of any branch chain it was in — the
+          // chain reconnects automatically (the step before it now leads
+          // straight to the step after it; if it was the only step, the
+          // branch becomes empty rather than being removed, so the author
+          // can still fill it back in from the canvas).
+          v.branches = Object.fromEntries(
+            Object.entries(v.branches).map(([branch, chain]) => [
+              branch,
+              chain.filter((sid) => sid !== id),
+            ]),
+          );
+        }
       }
     });
     if (selectedStep === id) setSelectedStep(null);
@@ -290,6 +427,25 @@ export function WorkflowEditor({
       if (!step) return;
       if (ref.kind === "default") {
         s[ref.from] = { ...step, next: "" };
+      } else if (ref.kind === "onError") {
+        s[ref.from] = { ...step, onError: undefined };
+      } else if (ref.kind === "parallelFanout") {
+        // Remove the whole branch this fan-out edge starts (its label IS
+        // the branch name — see `buildGraph`'s makeEdge(..., branch, ...)).
+        const branches = { ...(step.branches ?? {}) };
+        for (const [branch, chain] of Object.entries(branches)) {
+          if (chain[0] === ref.to) delete branches[branch];
+        }
+        s[ref.from] = { ...step, branches };
+      } else if (ref.kind === "branchJoin") {
+        // `ref.from` is a BRANCH's last step, not the parallel step itself
+        // (see `buildGraph`: makeEdge(last, parallel.next, ...)) — every
+        // branch shares the one `next` on the owning parallel step, so
+        // resolve that step and clear its `next` there.
+        const owner = branchIndex(s).get(ref.from);
+        if (owner && s[owner.parallelStep]) {
+          s[owner.parallelStep] = { ...s[owner.parallelStep], next: "" };
+        }
       } else if (step.conditions) {
         s[ref.from] = {
           ...step,
@@ -536,6 +692,44 @@ export function WorkflowEditor({
         </div>
       )}
 
+      {pendingBranchPick && (
+        <div
+          className="fixed inset-0 z-50 grid place-items-center bg-black/40 backdrop-blur-sm p-4"
+          onClick={() => setPendingBranchPick(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-border bg-surface p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-base font-semibold text-fg">Add to which branch?</h2>
+            <p className="text-sm text-muted mt-2">
+              <span className="font-mono text-fg">{pendingBranchPick.parallelStep}</span> has
+              more than one empty branch — pick which one{" "}
+              <span className="font-mono text-fg">{pendingBranchPick.to}</span> starts.
+            </p>
+            <div className="mt-3 space-y-1.5">
+              {pendingBranchPick.emptyBranches.map((branch) => (
+                <button
+                  key={branch}
+                  onClick={() => pickBranch(branch)}
+                  className="w-full text-left rounded-lg border border-border px-3 py-2 text-sm font-mono text-fg hover:bg-elevated hover:border-violet-400/50"
+                >
+                  {branch}
+                </button>
+              ))}
+            </div>
+            <div className="mt-4 flex justify-end">
+              <button
+                onClick={() => setPendingBranchPick(null)}
+                className="h-9 px-3 rounded-lg text-sm text-muted hover:text-fg hover:bg-elevated"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {pendingDeleteStep && (
         <ConfirmDialog
           title="Delete step?"
@@ -553,19 +747,52 @@ export function WorkflowEditor({
 
       {pendingDeleteEdge && (
         <ConfirmDialog
-          title="Delete connection?"
-          body={
-            <>
-              Remove the connection{" "}
-              <span className="font-mono text-fg">
-                {pendingDeleteEdge.from} → {pendingDeleteEdge.to}
-              </span>
-              {pendingDeleteEdge.kind === "default"
-                ? " (the default path)."
-                : " (a branch condition)."}
-            </>
+          title={
+            pendingDeleteEdge.kind === "parallelFanout"
+              ? "Remove branch?"
+              : pendingDeleteEdge.kind === "onError"
+                ? "Clear on-error route?"
+                : "Delete connection?"
           }
-          confirmLabel="Delete connection"
+          body={
+            pendingDeleteEdge.kind === "parallelFanout" ? (
+              <>
+                Remove this branch from{" "}
+                <span className="font-mono text-fg">{pendingDeleteEdge.from}</span> and every
+                step in its chain. The steps themselves are kept (only the
+                branch membership is removed).
+              </>
+            ) : pendingDeleteEdge.kind === "onError" ? (
+              <>
+                Clear the on-error route from{" "}
+                <span className="font-mono text-fg">{pendingDeleteEdge.from}</span>. A branch
+                failure will stop the run instead.
+              </>
+            ) : pendingDeleteEdge.kind === "branchJoin" ? (
+              <>
+                Clear the join step every branch reconverges on after{" "}
+                <span className="font-mono text-fg">{pendingDeleteEdge.from}</span>&apos;s
+                parallel step finishes.
+              </>
+            ) : (
+              <>
+                Remove the connection{" "}
+                <span className="font-mono text-fg">
+                  {pendingDeleteEdge.from} → {pendingDeleteEdge.to}
+                </span>
+                {pendingDeleteEdge.kind === "default"
+                  ? " (the default path)."
+                  : " (a branch condition)."}
+              </>
+            )
+          }
+          confirmLabel={
+            pendingDeleteEdge.kind === "parallelFanout"
+              ? "Remove branch"
+              : pendingDeleteEdge.kind === "onError"
+                ? "Clear route"
+                : "Delete connection"
+          }
           onCancel={() => setPendingDeleteEdge(null)}
           onConfirm={confirmDeleteEdge}
         />
