@@ -183,6 +183,7 @@ export type WorkflowSummary = {
   description: string;
   step_count: number;
   built: boolean;
+  has_gate: boolean;
   updated_at: number;
 };
 

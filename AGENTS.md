@@ -11,15 +11,15 @@ repeatable.
 ## Workflow lifecycle
 
 1. **Author** — natural language → `.botcircuits/workflows/<name>.json` (source of truth, hand-editable).
-2. **Build** — compiles `condition` strings into deterministic `choices[]` and aggregates `flow.variables` → `.botcircuits/workflows/.build/<name>.json`. **Only `.build/` is loaded at runtime.**
-3. **Run** — the deterministic engine walks the built state machine, evaluates compiled choices, and dispatches one `agentAction`/`question` step at a time to the host agent. Pause/resume cursors live in `.botcircuits/workflows/.runs/`.
+2. **Build** — compiles `condition` strings into deterministic `choices[]` and aggregates `flow.variables` → `.botcircuits/workflows/.build/<name>/<name>.json`. **Only `.build/` is loaded at runtime.** Also auto-generates a **verification gate** — deterministic script checks + LLM-judge checks derived from the workflow's declared result/variables — under `.botcircuits/workflows/.build/<name>/verifications/` (`agent/workflow/verification/generator.py`).
+3. **Run** — the deterministic engine walks the built state machine, evaluates compiled choices, and dispatches one `agentAction`/`question` step at a time to the host agent. Pause/resume cursors live in `.botcircuits/workflows/.runs/`. If a gate exists, `workflow run` checks the finished run against it and **self-repairs** by retrying the whole workflow (capped, with the failure fed back as context) before reporting a genuine failure (`agent/workflow/verification/executor.py::run_gate`, wired into `runtime/run_workflow.py::_run`).
 
 Two Claude/Hermes skills drive this from a host agent: `skills/botcircuits-workflow-authoring` (author + build) and `skills/botcircuits-workflow-running` (run/resume via the `botcircuits` CLI).
 
 ## Source layout (`src/botcircuits/`)
 
 - `agent/` — the core agent loop (`core.py` `Agent`, ReAct parsing in `react.py`), tool registry (`agent/tools/builtins/*`), skill discovery (`agent/skill/`), MCP client (`agent/mcp.py`), and conversation persistence (`agent/store.py`).
-- `agent/workflow/` — workflow authoring (`generator.py`, `graph_optimizer.py`, `condition_processor.py`) and the runnable `engine/` (step `handlers/` for action/choice/question, `executor.py`, `runner.py`, `segment_exec.py`, `state.py`). `evaluation/` holds the deepeval-based workflow eval harness.
+- `agent/workflow/` — workflow authoring (`generator.py`, `graph_optimizer.py`, `condition_processor.py`), path resolution (`paths.py` — the single source of truth for `.build/<name>/...` paths), the runnable `engine/` (step `handlers/` for action/choice/question, `executor.py`, `runner.py`, `segment_exec.py`, `state.py`), and `verification/` (the verification-gate framework: `executor.py::run_gate`, `script_check.py`, `judge_check.py`, `generator.py::generate_gate`). `evaluation/` holds the deepeval-based workflow eval harness.
 - `providers/` — LLM provider adapters (`anthropic.py`, `openai.py`, `gemini.py`) behind `providers/base.py:LLMProvider`.
 - `runtime/` — host-agent runtime abstraction (`runtime/providers/claude_code.py`, `hermes.py`, `inline.py`, `native.py`) used to dispatch a step's prompt to whichever CLI agent is configured as `settings.runtime`.
 - `cli/` — the `botcircuits` console-script entry point (`cli/app.py`, `cli/commands*.py`) — init, workflow build/run, mcp management, manager start/stop, skills install.

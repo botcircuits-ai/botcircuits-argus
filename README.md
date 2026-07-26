@@ -145,12 +145,13 @@ When you build a workflow, **workflow-builder**:
 
 - **Compiles each natural-language `condition`** (e.g. `"all items are in stock"`) into a deterministic `choices[]` entry — a concrete rule the engine evaluates the same way every time, with no model interpretation at navigation time.
 - **Aggregates a `flow.variables` list** across all steps, so the engine knows exactly which variables the workflow reads and writes and can supply the agent only the context needed for the next step.
-- **Writes the runnable copy** to `.botcircuits/workflows/.build/<name>.json`.
+- **Writes the runnable copy** to `.botcircuits/workflows/.build/<name>/<name>.json`.
+- **Generates a verification gate** — deterministic script checks and/or LLM-judge checks, derived from the workflow's declared result/variables, written to `.botcircuits/workflows/.build/<name>/verifications/`. This runs automatically on every build; you don't author it by hand.
 
 #### Where files live
 
 - `.botcircuits/workflows/*.json` — your authored sources, the editable source of truth (override the dir with `BOTCIRCUITS_WORKFLOWS_DIR`).
-- `.botcircuits/workflows/.build/` — built, runnable copies. **This is the only thing the runtime loads.**
+- `.botcircuits/workflows/.build/<name>/` — this workflow's built, runnable copy plus its verification gate. **This is the only thing the runtime loads.**
 - `.botcircuits/workflows/.runs/` — transient pause/resume cursors for in-progress runs.
 
 ### 3. Running
@@ -162,6 +163,8 @@ claude > "run order fulfillment for order #1024"
 > Same thing inside Hermes (`hermes "run order fulfillment …"`). The host agent follows the skills and shells out to the `botcircuits` CLI for you.
 
 **What the build buys you at run time:** because navigation was compiled ahead of time, the **deterministic engine** — not the AI — decides which step comes next. The engine loads the built workflow from `.build/`, walks the state machine step by step, evaluates the compiled `choices[]` to pick each branch, and dispatches only the current action to the AI agent along with just the variables that step needs. The result: the same inputs always follow the same path, every step is traceable, and the agent never burns tokens reasoning about routing.
+
+**Self-repair:** if the workflow has a verification gate, `workflow run` checks the finished run's outcome against it automatically. A failing gate triggers an automatic retry of the whole workflow — with the failure fed back as context — up to a small fixed number of attempts, before the run is reported as a genuine `failure`. Workflows with no gate are unaffected.
 
 You can also run directly via the CLI:
 

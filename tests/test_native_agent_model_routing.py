@@ -98,7 +98,7 @@ def test_unpinned_and_unknown_agent_return_default():
 
 def test_collect_agents_config_merges_workflow_agents(tmp_path, monkeypatch):
     monkeypatch.setenv(wf_local.WORKFLOWS_DIR_ENV, str(tmp_path))
-    build = tmp_path / ".build"
+    build = tmp_path / ".build" / "wf_pinned"
     build.mkdir(parents=True, exist_ok=True)
     record = {
         "name": "wf_pinned",

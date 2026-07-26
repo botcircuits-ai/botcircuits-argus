@@ -35,6 +35,7 @@ from typing import Any
 from botcircuits.runtime.detect import (
     NATIVE,
     detect_runtime_name as _detect,
+    runtime_config,
     select_runtime,
 )
 from botcircuits.agent.workflow.engine.runner import run_workflow_engine
@@ -43,11 +44,24 @@ from botcircuits.agent.workflow.local import (
     _load_workflow_record,
     _resolve_workflows_dir,
 )
+from botcircuits.agent.workflow.paths import build_dir_for
 from botcircuits.agent.workflow.tracing import SessionTrace, new_session_id
+from botcircuits.agent.workflow.verification import run_gate
+from botcircuits.agent.workflow.verification.generator import load_gate
 from botcircuits.runtime.trace_hooks import traced_provider
 
 
 _RUNS_DIR_NAME = ".runs"
+
+#: Repair budget for a workflow with a verification gate: up to this many
+#: RE-RUNS of the whole workflow (from `start`, with the prior failure fed
+#: back as `__repair_feedback__`) after the first attempt fails the gate.
+#: Fixed, not configurable — mirrors the bounded-loop philosophy already
+#: used for `_MAX_SEGMENTS` in the engine and `verify_attempts` in the
+#: agent loop's enforced-run gate. Gate generation/repair are both fully
+#: automatic (no opt-in flags), so this is the one dial that keeps an
+#: unlucky judge call from spinning the runner forever.
+_MAX_REPAIR_ATTEMPTS = 2
 
 #: Replies that count as "yes, grant the tool" when a segment paused asking
 #: for a tool permission. Matched case-insensitively as a leading token, so
@@ -327,6 +341,33 @@ def _select_provider(
     )
 
 
+def _has_judge_check(gate_spec: dict | None) -> bool:
+    if not gate_spec:
+        return False
+    return any(
+        isinstance(c, dict) and c.get("type") == "llm_judge"
+        for c in (gate_spec.get("checks") or [])
+    )
+
+
+def _judge_provider(resolved_name: str):
+    """Build a standalone `LLMProvider` for the gate's `llm_judge` checks.
+
+    `_select_provider`'s runtime (`ClaudeCodeRuntime` et al.) is an
+    `AgentRuntimeProvider` — it drives workflow SEGMENTS, not plain
+    `complete()` calls, so it can't be handed to `run_gate` directly.
+    This mirrors `commands_workflow.py::_make_build_provider`'s "reuse
+    the host CLI agent" pattern: same runtime the run itself used, just
+    wrapped as a plain `LLMProvider` for one-shot judge calls. Built
+    lazily — only when the gate actually has a judge check — so a
+    pure-script gate never pays for a second provider.
+    """
+    from botcircuits.runtime.cli_llm_provider import CliLLMProvider
+
+    config = runtime_config(resolved_name, settings=None)
+    return CliLLMProvider(config)
+
+
 async def _run(
     name: str,
     *,
@@ -420,36 +461,110 @@ async def _run(
             resolve_unfilled=lambda **kw: run_provider.resolve_slots(**kw),
             event_sink=sink,
         )
+
+        usage_dict = result.usage.to_dict() if result.usage else None
+
+        if result.paused:
+            _save_state(name, {
+                "engine_paused_step": result.paused_step or resume_step,
+                "engine_slots": result.slots,
+                "session_id": trace.session_id if trace else None,
+                # Carry the tool(s) this pause is blocked on so the next --reply
+                # can grant them, plus the running set already granted.
+                "needs_tool": list(result.needs_tool),
+                "granted_tools": granted,
+            })
+            if trace:
+                trace.event(
+                    "paused", slots=result.slots,
+                    data={"question": result.question, "usage": usage_dict},
+                )
+            out: dict[str, Any] = {
+                "status": "paused", "question": result.question, "name": name,
+            }
+            if result.options:
+                # Predefined answers for the question — hosts with a UI can
+                # render them as a selector; --reply accepts them verbatim.
+                out["options"] = list(result.options)
+            if usage_dict:
+                out["usage"] = usage_dict
+            return out
+
+        # --- Verification gate + self-repair -------------------------------
+        # Auto-detects `.build/<name>/verifications/gate.json`; absent means
+        # this workflow has no gate, so behavior is byte-for-byte identical
+        # to before this feature existed (zero overhead, fully backward
+        # compatible). When a gate exists, a blocking failure triggers a
+        # RETRY OF THE WHOLE WORKFLOW from `start` (see run_workflow.py's
+        # module docstring / the plan this implements for why "retry the
+        # whole run" was chosen over retrying a single segment or patching
+        # the built JSON) with the failure folded into slots as
+        # `__repair_feedback__`, capped at `_MAX_REPAIR_ATTEMPTS`.
+        gate_spec = load_gate(name)
+        gate_attempts: list[dict] = []
+        run_slots = dict(slots)
+        repair_count = 0
+        judge_provider = (
+            _judge_provider(resolved_name) if _has_judge_check(gate_spec) else None
+        )
+        try:
+            while gate_spec is not None:
+                clean_slots = {
+                    k: v for k, v in (result.slots or {}).items()
+                    if not k.startswith("__")
+                }
+                run_record = {
+                    "workflow_name": name,
+                    "slots": clean_slots,
+                    "summary": result.summary,
+                    "decisions": result.decisions,
+                    "done": True,
+                }
+                gate_result = await run_gate(
+                    gate_spec, run_record, provider=judge_provider,
+                    base_dir=build_dir_for(name),
+                )
+                gate_attempts.append(gate_result.to_dict())
+                if gate_result.passed or repair_count >= _MAX_REPAIR_ATTEMPTS:
+                    break
+                repair_count += 1
+                run_slots = {
+                    **run_slots,
+                    "__repair_feedback__": [
+                        f"{c.check_id}: {c.error or c.detail}"
+                        for c in gate_result.blocking_failures()
+                    ],
+                }
+                result = await run_workflow_engine(
+                    flow,
+                    workflow_name=name,
+                    run_segment=lambda **kw: run_provider.run_segment(**kw),
+                    start_step_id=None,
+                    slots=run_slots,
+                    resolve_unfilled=lambda **kw: run_provider.resolve_slots(**kw),
+                    event_sink=sink,
+                )
+                usage_dict = result.usage.to_dict() if result.usage else usage_dict
+                if result.paused:
+                    # A repair re-run paused for human input — surface that as
+                    # the outcome; the gate's verdict is preserved in
+                    # `gate.attempts` for context but the run itself is
+                    # genuinely non-terminal.
+                    out = {
+                        "status": "paused", "question": result.question,
+                        "name": name,
+                    }
+                    if result.options:
+                        out["options"] = list(result.options)
+                    if usage_dict:
+                        out["usage"] = usage_dict
+                    out["gate"] = {"attempts": gate_attempts}
+                    return out
+        finally:
+            if judge_provider is not None:
+                await judge_provider.aclose()
     finally:
         await provider.aclose()
-
-    usage_dict = result.usage.to_dict() if result.usage else None
-
-    if result.paused:
-        _save_state(name, {
-            "engine_paused_step": result.paused_step or resume_step,
-            "engine_slots": result.slots,
-            "session_id": trace.session_id if trace else None,
-            # Carry the tool(s) this pause is blocked on so the next --reply
-            # can grant them, plus the running set already granted.
-            "needs_tool": list(result.needs_tool),
-            "granted_tools": granted,
-        })
-        if trace:
-            trace.event(
-                "paused", slots=result.slots,
-                data={"question": result.question, "usage": usage_dict},
-            )
-        out: dict[str, Any] = {
-            "status": "paused", "question": result.question, "name": name,
-        }
-        if result.options:
-            # Predefined answers for the question — hosts with a UI can
-            # render them as a selector; --reply accepts them verbatim.
-            out["options"] = list(result.options)
-        if usage_dict:
-            out["usage"] = usage_dict
-        return out
 
     _clear_state(name)
     clean_slots = {
@@ -466,6 +581,16 @@ async def _run(
     out = {"status": "done", "summary": result.summary, "slots": clean_slots}
     if usage_dict:
         out["usage"] = usage_dict
+    if gate_spec is not None:
+        out["gate"] = {"attempts": gate_attempts}
+        if not gate_attempts[-1]["passed"]:
+            # Exhausted the repair budget without a passing gate — this must
+            # be surfaced as a real failure, never a silent "done".
+            out["status"] = "failure"
+            out["message"] = (
+                f"workflow {name!r} completed but failed verification after "
+                f"{len(gate_attempts)} attempt(s)"
+            )
     return out
 
 

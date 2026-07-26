@@ -35,7 +35,7 @@ def _record() -> dict:
 
 def _setup(tmp_path, monkeypatch, remembered: dict | None = None) -> None:
     monkeypatch.setenv(wf_local.WORKFLOWS_DIR_ENV, str(tmp_path))
-    build = tmp_path / ".build"
+    build = tmp_path / ".build" / "wf_inputs"
     build.mkdir(parents=True, exist_ok=True)
     (build / "wf_inputs.json").write_text(json.dumps(_record()))
     if remembered:

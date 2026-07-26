@@ -11,7 +11,8 @@ comparison, then delete the file. This mirrors what `/workflow add
   2. Call the `build_workflow` tool's handler programmatically with
      `auto=True` so the y/N gate is skipped. This writes both the raw
      source under `.botcircuits/workflows/<name>.json` and the indexed
-     runnable artifact under `.botcircuits/workflows/.build/<name>.json`.
+     runnable artifact under
+     `.botcircuits/workflows/.build/<name>/<name>.json`.
   3. Return the chosen workflow name. The harness then runs the
      existing workflow + prompt-only runners against it.
   4. After the eval pass, delete both files. Cleanup runs even when
@@ -28,12 +29,14 @@ import contextlib
 import json
 import re
 
+import shutil
+
 from botcircuits.providers.base import LLMProvider
 from botcircuits.types import Message
-from botcircuits.agent.tools.builtins.build_workflow import (
-    BUILD_DIR_NAME,
-    _resolve_workflows_dir,
-    build_workflow_tool,
+from botcircuits.agent.tools.builtins.build_workflow import build_workflow_tool
+from botcircuits.agent.workflow.paths import (
+    build_dir_for,
+    resolve_workflows_dir as _resolve_workflows_dir,
 )
 
 
@@ -189,12 +192,19 @@ def cleanup_inline_workflow(name: str) -> list[str]:
     removed. Idempotent — missing files are skipped silently so the
     cleanup is safe to call from a `finally` block even when the build
     half-failed.
+
+    Removes the raw source file plus the whole per-workflow build
+    folder (`.build/<name>/`, which holds the built JSON and, when a
+    gate was generated, `verifications/`) in one shot.
     """
     directory = _resolve_workflows_dir()
-    build_dir = directory / BUILD_DIR_NAME
     removed: list[str] = []
-    for path in (directory / f"{name}.json", build_dir / f"{name}.json"):
-        with contextlib.suppress(FileNotFoundError):
-            path.unlink()
-            removed.append(str(path))
+    source_path = directory / f"{name}.json"
+    with contextlib.suppress(FileNotFoundError):
+        source_path.unlink()
+        removed.append(str(source_path))
+    build_dir = build_dir_for(name)
+    if build_dir.is_dir():
+        shutil.rmtree(build_dir, ignore_errors=True)
+        removed.append(str(build_dir))
     return removed
