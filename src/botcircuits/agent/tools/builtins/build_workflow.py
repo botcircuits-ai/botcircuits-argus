@@ -28,6 +28,17 @@ file format so the LLM can reason about it directly:
       "name":        "<slug-safe identifier; doubles as filename + tool name>",
       "description": "<one-line description of when to run it>",
       "summary":     "<short prose summary used in the confirm block>",
+      "self_repair": false,   # optional, default false. Set true to opt
+                               # this workflow into an AUTOMATED verification
+                               # gate (LLM-generated checks against the run's
+                               # final result) + auto-repair (re-runs the
+                               # whole workflow from `start`, capped, on a
+                               # failing check). Leave false/omitted when
+                               # the workflow already validates its own
+                               # output with an explicit step + loop-back —
+                               # a second, independently-judged gate would
+                               # only second-guess that loop and can restart
+                               # the whole run out from under it.
       "steps": {
         "<step_id>": {
           "type":       "start" | "agentAction" | "question" | "systemAction",
@@ -183,6 +194,13 @@ def _build_file_record(workflow: dict) -> dict:
         ),
         "flow": flow,
     }
+    # Opt-in: an author who wants the automated verification gate + auto-
+    # repair loop (see verification/generator.py, run_workflow.py) sets this
+    # explicitly. Off by default so a workflow that already validates itself
+    # with its own loop-back step isn't second-guessed by an independently
+    # generated gate that restarts the whole run on a disagreement.
+    if workflow.get("self_repair"):
+        record["self_repair"] = True
     return record
 
 
@@ -369,13 +387,18 @@ def build_workflow_tool(
 
         # Generate the verification gate — deterministic script checks +
         # LLM-judge checks that evaluate a RUN of this workflow, derived
-        # from its declared result/variables shape. Automatic and
-        # best-effort: a generation failure is reported but never turns
-        # a successful workflow build into a failed one (mirrors the
-        # indexer's own failure handling just above).
+        # from its declared result/variables shape. Opt-in via the
+        # workflow's top-level `self_repair: true` (see workflow_validator
+        # / run_workflow.py's matching check): an author who already builds
+        # their own validate-and-loop-back step into the flow doesn't want
+        # a second, independently-judged gate restarting the whole run out
+        # from under their own loop. Best-effort when enabled: a generation
+        # failure is reported but never turns a successful workflow build
+        # into a failed one (mirrors the indexer's own failure handling
+        # just above).
         gate_summary: dict[str, Any] | None = None
         gate_error: str | None = None
-        if built_written and provider is not None:
+        if built_written and provider is not None and raw_record.get("self_repair"):
             from ...workflow.verification import generate_gate
 
             try:

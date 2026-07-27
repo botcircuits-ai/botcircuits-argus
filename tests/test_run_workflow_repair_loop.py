@@ -38,7 +38,7 @@ class _FakeRuntimeProvider:
         pass
 
 
-def _record(name: str) -> dict:
+def _record(name: str, *, self_repair: bool = True) -> dict:
     from botcircuits.agent.workflow.engine.segments import compute_segments
 
     flow = {
@@ -49,13 +49,18 @@ def _record(name: str) -> dict:
         },
     }
     flow["segments"] = compute_segments(flow)
-    return {"name": name, "description": "test", "flow": flow}
+    record = {"name": name, "description": "test", "flow": flow}
+    if self_repair:
+        record["self_repair"] = True
+    return record
 
 
-def _write_build(tmp_path, name: str) -> None:
+def _write_build(tmp_path, name: str, *, self_repair: bool = True) -> None:
     build = tmp_path / ".build" / name
     build.mkdir(parents=True, exist_ok=True)
-    (build / f"{name}.json").write_text(json.dumps(_record(name)), encoding="utf-8")
+    (build / f"{name}.json").write_text(
+        json.dumps(_record(name, self_repair=self_repair)), encoding="utf-8",
+    )
 
 
 def _write_gate(tmp_path, name: str, *, script_passes: bool) -> None:
@@ -154,6 +159,35 @@ def test_no_gate_file_behaves_exactly_like_before(_isolated):
     assert out["status"] == "done"
     assert "gate" not in out
     assert fake.run_segment_calls == 1
+
+
+def test_self_repair_not_set_ignores_existing_gate_file(_isolated):
+    """`self_repair` is opt-in: a `gate.json` on disk (e.g. left over from
+    before the flag was added/toggled off, or generated once and then the
+    author decided against it) must NOT be applied unless the workflow's
+    record also carries `self_repair: true`. This is exactly the case an
+    author who hand-builds their own validate-and-loop-back step relies on
+    — the automated gate must stay inert for them."""
+    tmp_path, fake = _isolated
+    _write_build(tmp_path, "wf_optout", self_repair=False)
+    _write_gate(tmp_path, "wf_optout", script_passes=False)  # would fail if applied
+
+    out = asyncio.run(_run("wf_optout"))
+    assert out["status"] == "done"
+    assert "gate" not in out
+    assert fake.run_segment_calls == 1
+
+
+def test_self_repair_true_applies_existing_gate_file(_isolated):
+    """The mirror case: `self_repair: true` turns the same gate.json ON."""
+    tmp_path, fake = _isolated
+    _write_build(tmp_path, "wf_optin", self_repair=True)
+    _write_gate(tmp_path, "wf_optin", script_passes=False)
+
+    out = asyncio.run(_run("wf_optin"))
+    assert out["status"] == "failure"
+    assert "gate" in out
+    assert fake.run_segment_calls == 1 + rw._MAX_REPAIR_ATTEMPTS
 
 
 def _session_doc(before_files: set):

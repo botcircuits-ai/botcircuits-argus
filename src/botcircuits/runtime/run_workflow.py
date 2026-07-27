@@ -491,16 +491,20 @@ async def _run(
             return out
 
         # --- Verification gate + self-repair -------------------------------
-        # Auto-detects `.build/<name>/verifications/gate.json`; absent means
-        # this workflow has no gate, so behavior is byte-for-byte identical
-        # to before this feature existed (zero overhead, fully backward
-        # compatible). When a gate exists, a blocking failure triggers a
-        # RETRY OF THE WHOLE WORKFLOW from `start` (see run_workflow.py's
-        # module docstring / the plan this implements for why "retry the
-        # whole run" was chosen over retrying a single segment or patching
-        # the built JSON) with the failure folded into slots as
+        # Opt-in via the workflow's top-level `self_repair: true` — an
+        # author who already builds their own validate-and-loop-back step
+        # into the flow doesn't want a second, independently-judged gate
+        # second-guessing it and restarting the whole run out from under
+        # their own loop. Off (or a gate that predates the flag being set)
+        # means behavior is byte-for-byte identical to before this feature
+        # existed (zero overhead, fully backward compatible). When enabled
+        # and a gate exists, a blocking failure triggers a RETRY OF THE
+        # WHOLE WORKFLOW from `start` (see run_workflow.py's module
+        # docstring / the plan this implements for why "retry the whole
+        # run" was chosen over retrying a single segment or patching the
+        # built JSON) with the failure folded into slots as
         # `__repair_feedback__`, capped at `_MAX_REPAIR_ATTEMPTS`.
-        gate_spec = load_gate(name)
+        gate_spec = load_gate(name) if record.get("self_repair") else None
         gate_attempts: list[dict] = []
         run_slots = dict(slots)
         repair_count = 0

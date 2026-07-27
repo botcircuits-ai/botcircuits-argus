@@ -665,20 +665,24 @@ def _cmd_build(args: argparse.Namespace) -> int:
     except Exception:
         pass
 
-    # Verification gate — automatic, best-effort. A generation failure is
-    # reported but never fails the build; the workflow remains runnable
-    # without a gate (see verification/generator.py for the framework/
-    # generated-checks split).
-    try:
-        from botcircuits.agent.workflow.verification import generate_gate
-        manifest = asyncio.run(generate_gate(record["flow"], built_name, provider))
-        out(C.dim(f"  gate: {len(manifest.get('checks') or [])} check(s) generated"))
-    except Exception as e:
-        out(C.yellow(
-            f"[workflow] gate generation failed: {type(e).__name__}: {e}. "
-            f"The workflow was still built successfully and remains "
-            f"runnable without a gate."
-        ))
+    # Verification gate — opt-in via the workflow's top-level
+    # `self_repair: true`, best-effort. A generation failure is reported
+    # but never fails the build; the workflow remains runnable without a
+    # gate (see verification/generator.py for the framework/generated-
+    # checks split). Off by default: an author who already builds their
+    # own validate-and-loop-back step into the flow doesn't want a second,
+    # independently-judged gate restarting the whole run out from under it.
+    if record.get("self_repair"):
+        try:
+            from botcircuits.agent.workflow.verification import generate_gate
+            manifest = asyncio.run(generate_gate(record["flow"], built_name, provider))
+            out(C.dim(f"  gate: {len(manifest.get('checks') or [])} check(s) generated"))
+        except Exception as e:
+            out(C.yellow(
+                f"[workflow] gate generation failed: {type(e).__name__}: {e}. "
+                f"The workflow was still built successfully and remains "
+                f"runnable without a gate."
+            ))
 
     out(C.dim(f"(source: {source_path})"))
     out(C.dim(f"(built:  {build_path})"))

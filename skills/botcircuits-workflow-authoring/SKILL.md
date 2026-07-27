@@ -69,12 +69,12 @@ of these cues (a fixed linear or branching process), use ordinary
    botcircuits workflow build --name <name>
    ```
 
-   Only built workflows are runnable. The build also automatically generates a
-   **verification gate** (`.build/<name>/verifications/`) — deterministic
-   script checks and/or LLM-judge checks derived from the workflow's declared
-   result/variables — that `workflow run` checks the outcome against and
-   self-repairs on afterward. This is automatic; you don't author or invoke it
-   yourself.
+   Only built workflows are runnable. Add `"self_repair": true` at the top
+   level (sibling of `name`/`flow`) only if the user asks for automatic
+   verification/retry, or the workflow has no validation step of its own.
+   this makes the build generate a verification gate that `workflow run`
+   checks the outcome against and self-repairs on. Omit it (the default) for
+   a workflow that already validates its own output with a loop-back step.
 
 4. **Confirm** to the user: name, what it does, and the step/branch outline.
 

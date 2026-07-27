@@ -70,8 +70,13 @@ skill. It generates the `security_patch_gate` workflow, which:
 4. writes `patch-report-<date>.json` with the finding id, patched file, and
    a short summary of the change.
 
-Building the workflow also **automatically generates a verification gate**
-(this is the whole point of the example): a `script` check whose code is
+The workflow source sets `"self_repair": true` — the opt-in that turns on
+gate generation at build time (see `verification/generator.py`); leave it
+unset and a build produces no gate at all, since an author who already
+validates their own output shouldn't get a second, independently-judged
+gate for free. With it set, building the workflow **automatically generates
+a verification gate** (this is the whole point of the example): a `script`
+check whose code is
 
 ```python
 subprocess.run(["npm", "test"], cwd=<app_dir>, ...)

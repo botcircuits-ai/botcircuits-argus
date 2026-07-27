@@ -20,19 +20,19 @@ def _isolated_workflows_dir(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _payload() -> dict:
-    return {
-        "summary": "A trivial one-step workflow.",
-        "workflow": {
-            "name": "wf_gatetest",
-            "description": "test",
-            "steps": {
-                "start": {"type": "start", "next": "s1"},
-                "s1": {"type": "agentAction",
-                       "settings": {"action": "Say hello."}},
-            },
+def _payload(*, self_repair: bool = True) -> dict:
+    workflow = {
+        "name": "wf_gatetest",
+        "description": "test",
+        "steps": {
+            "start": {"type": "start", "next": "s1"},
+            "s1": {"type": "agentAction",
+                   "settings": {"action": "Say hello."}},
         },
     }
+    if self_repair:
+        workflow["self_repair"] = True
+    return {"summary": "A trivial one-step workflow.", "workflow": workflow}
 
 
 _GATE_REPLY = json.dumps({
@@ -97,3 +97,19 @@ def test_no_provider_skips_gate_generation_silently():
     # generation is skipped rather than attempted without a provider.
     assert result.get("gate") is None
     assert result.get("gate_error") is None
+
+
+def test_self_repair_not_requested_skips_gate_generation():
+    """`self_repair` is opt-in: a workflow that doesn't set it must never
+    trigger gate generation, even with a provider available — an author
+    who already validates their own output with an explicit loop-back
+    step shouldn't get a second, independently-judged gate for free."""
+    provider = ScriptedProvider([text_response(_GATE_REPLY)])
+    tool = build_workflow_tool(provider=provider, auto=True)
+
+    result = asyncio.run(tool.handler(_payload(self_repair=False)))
+    assert result.get("error") is None
+    assert result["indexed"] is True
+    assert result.get("gate") is None
+    assert result.get("gate_error") is None
+    assert paths.gate_manifest_path("wf_gatetest").exists() is False
