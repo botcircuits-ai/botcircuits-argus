@@ -67,6 +67,7 @@ def _read(path: Path) -> dict[str, Any] | None:
 
 def _summary(
     name: str, doc: dict[str, Any], *, built: bool, has_gate: bool, mtime: float,
+    last_gate: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Compact record for the list endpoint (no full flow)."""
     flow = doc.get("flow") or {}
@@ -78,6 +79,7 @@ def _summary(
         "built": built,
         "has_gate": has_gate,
         "updated_at": mtime,
+        "last_gate": last_gate,
     }
 
 
@@ -87,7 +89,10 @@ def list_workflows() -> list[dict[str, Any]]:
     ``built`` reflects whether a ``.build/<name>/<name>.json`` counterpart
     exists, so the UI can flag sources that still need a build before
     they're runnable. ``has_gate`` reflects whether that build also
-    carries a generated verification gate.
+    carries a generated verification gate. ``last_gate`` is the verdict
+    (pass/fail + attempt/retry counts) from the workflow's most recent run,
+    or ``None`` if it's never run with a gate — a static counterpart to
+    ``has_gate`` that says whether that gate is currently passing.
     """
     src_dir = _resolve_workflows_dir()
     if not src_dir.is_dir():
@@ -97,6 +102,9 @@ def list_workflows() -> list[dict[str, Any]]:
         {p.parent.name for p in build_dir.glob("*/*.json")}
         if build_dir.is_dir() else set()
     )
+    from botcircuits.manager import store as _session_store
+
+    last_gate_by_name = _session_store.latest_gate_by_workflow()
     out: list[dict[str, Any]] = []
     for path in src_dir.glob("*.json"):
         doc = _read(path)
@@ -112,6 +120,7 @@ def list_workflows() -> list[dict[str, Any]]:
             built=stem in built_stems,
             has_gate=gate_manifest_path(stem).is_file(),
             mtime=mtime,
+            last_gate=last_gate_by_name.get(doc.get("name") or stem),
         ))
     out.sort(key=lambda s: s.get("updated_at") or 0, reverse=True)
     return out

@@ -28,7 +28,7 @@ Each ``trace`` event is::
 
 Event types (see EventType): ``session_start``, ``step_enter``,
 ``action_before``, ``action_after``, ``slot_resolve``, ``branch``,
-``session_end``.
+``verification``, ``retry``, ``session_end``.
 
 Writing is best-effort and never raises into the run — tracing must not be able
 to break a workflow. Each append rewrites the file atomically (temp + rename),
@@ -64,6 +64,8 @@ class EventType:
     SLOT_RESOLVE = "slot_resolve"
     BRANCH = "branch"
     USAGE = "usage"
+    VERIFICATION = "verification"
+    RETRY = "retry"
     SESSION_END = "session_end"
 
 

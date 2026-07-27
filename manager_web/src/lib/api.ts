@@ -12,6 +12,29 @@ export const GITHUB_URL =
   process.env.NEXT_PUBLIC_GITHUB_URL ??
   "https://github.com/botcircuits-ai/botcircuits-agent";
 
+/** One check's outcome within a gate verdict (mirrors the backend's
+ * `CheckResult.to_dict()`). */
+export type GateCheckResult = {
+  id: string;
+  passed: boolean;
+  severity: "blocking" | "advisory" | string;
+  detail: string;
+  error: string | null;
+};
+
+/** A session's folded verification-gate verdict — the last gate evaluation's
+ * pass/fail plus how many evaluations/repair-retries the run went through.
+ * `null` (not present) on a session/workflow that never ran a gate, distinct
+ * from a gate that ran and passed. Emitted by both `GET /api/sessions`
+ * (per-session) and `GET /api/workflows` (`last_gate`, from the workflow's
+ * most recent session). */
+export type GateSummary = {
+  passed: boolean;
+  attempts: number;
+  retries: number;
+  checks: GateCheckResult[];
+};
+
 export type SessionSummary = {
   session_id: string;
   workflow: string | null;
@@ -21,6 +44,7 @@ export type SessionSummary = {
   status: "running" | "paused" | "done" | "failure" | string;
   event_count: number;
   updated_at: number;
+  gate: GateSummary | null;
 };
 
 export type TraceEvent = {
@@ -57,6 +81,26 @@ export type RunUsage = {
   cache_write_tokens: number;
   calls: number;
   steps: ActionUsage[];
+};
+
+/** `data` payload of a `verification` trace event — one gate evaluation
+ * against a completed (or repaired) run. `attempt` is 1-based and counts
+ * gate EVALUATIONS, not engine re-runs. */
+export type VerificationEventData = {
+  attempt: number;
+  workflow_name: string;
+  passed: boolean;
+  checks: GateCheckResult[];
+};
+
+/** `data` payload of a `retry` trace event — emitted once per repair
+ * re-run, right before the workflow is re-executed from `start` with the
+ * prior failure folded into `__repair_feedback__`. `attempt` is 1-based and
+ * capped at `max_attempts` (the fixed repair budget). */
+export type RetryEventData = {
+  attempt: number;
+  max_attempts: number;
+  reason: string[];
 };
 
 export type MemoryNode = {
@@ -185,6 +229,10 @@ export type WorkflowSummary = {
   built: boolean;
   has_gate: boolean;
   updated_at: number;
+  /** Verdict from this workflow's most recent run, or `null` if it has never
+   * run with a gate. A static counterpart to `has_gate`: that says a gate is
+   * configured, this says whether it's currently passing. */
+  last_gate: GateSummary | null;
 };
 
 export type BuildResult = {

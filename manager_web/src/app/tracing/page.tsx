@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { GateBadge } from "@/components/GateBadge";
 import { RefreshButton } from "@/components/RefreshButton";
 import { RequireAuth } from "@/components/RequireAuth";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -98,6 +99,7 @@ function TracingList() {
               <tr>
                 <Th>Workflow</Th>
                 <Th>Status</Th>
+                <Th>Gate</Th>
                 <Th>Runtime</Th>
                 <Th>Events</Th>
                 <Th>Started</Th>
@@ -122,6 +124,10 @@ function TracingList() {
                   </Td>
                   <Td>
                     <StatusBadge status={s.status} />
+                  </Td>
+                  <Td>
+                    <GateBadge gate={s.gate} />
+                    {!s.gate && <span className="text-muted">—</span>}
                   </Td>
                   <Td className="text-muted">{s.runtime ?? "—"}</Td>
                   <Td className="text-muted tabular-nums">{s.event_count}</Td>

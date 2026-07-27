@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import { GateBadge } from "@/components/GateBadge";
 import { RefreshButton } from "@/components/RefreshButton";
 import { RequireAuth } from "@/components/RequireAuth";
 import { EditIcon, PlusIcon, TrashIcon } from "@/components/icons";
@@ -144,6 +145,11 @@ function WorkflowList() {
                         className="ml-1 inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium bg-brand-600/15 text-brand-600 border-brand-600/30 dark:text-brand-400 dark:border-brand-400/30"
                       >
                         gate
+                      </span>
+                    )}
+                    {w.has_gate && (
+                      <span className="ml-1 inline-block">
+                        <GateBadge gate={w.last_gate} />
                       </span>
                     )}
                   </Td>

@@ -524,17 +524,35 @@ async def _run(
                     gate_spec, run_record, provider=judge_provider,
                     base_dir=build_dir_for(name),
                 )
-                gate_attempts.append(gate_result.to_dict())
+                gate_dict = gate_result.to_dict()
+                gate_attempts.append(gate_dict)
+                if trace:
+                    trace.event(
+                        "verification",
+                        slots=result.slots,
+                        data={"attempt": len(gate_attempts), **gate_dict},
+                    )
                 if gate_result.passed or repair_count >= _MAX_REPAIR_ATTEMPTS:
                     break
                 repair_count += 1
+                feedback = [
+                    f"{c.check_id}: {c.error or c.detail}"
+                    for c in gate_result.blocking_failures()
+                ]
                 run_slots = {
                     **run_slots,
-                    "__repair_feedback__": [
-                        f"{c.check_id}: {c.error or c.detail}"
-                        for c in gate_result.blocking_failures()
-                    ],
+                    "__repair_feedback__": feedback,
                 }
+                if trace:
+                    trace.event(
+                        "retry",
+                        slots=run_slots,
+                        data={
+                            "attempt": repair_count,
+                            "max_attempts": _MAX_REPAIR_ATTEMPTS,
+                            "reason": feedback,
+                        },
+                    )
                 result = await run_workflow_engine(
                     flow,
                     workflow_name=name,

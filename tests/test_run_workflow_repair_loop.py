@@ -154,3 +154,102 @@ def test_no_gate_file_behaves_exactly_like_before(_isolated):
     assert out["status"] == "done"
     assert "gate" not in out
     assert fake.run_segment_calls == 1
+
+
+def _session_doc(before_files: set):
+    from botcircuits.agent.workflow.tracing import SessionTrace
+
+    sessions_dir = SessionTrace.sessions_dir()
+    files = set(sessions_dir.glob("*-session.json")) - before_files
+    assert len(files) == 1
+    return json.loads(next(iter(files)).read_text(encoding="utf-8"))
+
+
+def _existing_session_files() -> set:
+    from botcircuits.agent.workflow.tracing import SessionTrace
+
+    sessions_dir = SessionTrace.sessions_dir()
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    return set(sessions_dir.glob("*-session.json"))
+
+
+def test_gate_pass_writes_verification_event_to_trace(_isolated):
+    tmp_path, fake = _isolated
+    _write_build(tmp_path, "wf_ok")
+    _write_gate(tmp_path, "wf_ok", script_passes=True)
+
+    before = _existing_session_files()
+    asyncio.run(_run("wf_ok"))
+
+    doc = _session_doc(before)
+    verif_events = [e for e in doc["trace"] if e["type"] == "verification"]
+    assert len(verif_events) == 1
+    assert verif_events[0]["data"]["attempt"] == 1
+    assert verif_events[0]["data"]["passed"] is True
+    assert verif_events[0]["data"]["checks"][0]["id"] == "chk"
+    # No retry needed when the gate passes on the first try.
+    assert not [e for e in doc["trace"] if e["type"] == "retry"]
+
+
+def test_gate_fails_then_passes_writes_retry_and_verification_events(_isolated, monkeypatch):
+    tmp_path, fake = _isolated
+    _write_build(tmp_path, "wf_flaky")
+    _write_gate(tmp_path, "wf_flaky", script_passes=True)
+
+    from botcircuits.agent.workflow.verification.types import CheckResult, GateResult
+
+    calls = {"n": 0}
+
+    async def fake_run_gate(gate_spec, run, *, provider=None, base_dir=None):
+        calls["n"] += 1
+        passed = calls["n"] >= 2
+        return GateResult(
+            workflow_name="wf_flaky", passed=passed,
+            checks=[CheckResult(
+                check_id="chk", passed=passed, severity="blocking",
+                error=None if passed else "check failed",
+            )],
+        )
+
+    monkeypatch.setattr(rw, "run_gate", fake_run_gate)
+
+    before = _existing_session_files()
+    asyncio.run(_run("wf_flaky"))
+
+    doc = _session_doc(before)
+    verif_events = [e for e in doc["trace"] if e["type"] == "verification"]
+    retry_events = [e for e in doc["trace"] if e["type"] == "retry"]
+
+    assert len(verif_events) == 2
+    assert [e["data"]["passed"] for e in verif_events] == [False, True]
+
+    assert len(retry_events) == 1
+    assert retry_events[0]["data"]["attempt"] == 1
+    assert retry_events[0]["data"]["max_attempts"] == rw._MAX_REPAIR_ATTEMPTS
+    assert "chk: check failed" in retry_events[0]["data"]["reason"]
+
+    # The retry event must come between the two verification events.
+    types_in_order = [e["type"] for e in doc["trace"]
+                       if e["type"] in ("verification", "retry")]
+    assert types_in_order == ["verification", "retry", "verification"]
+
+
+def test_gate_never_passes_writes_retry_for_every_repair_attempt(_isolated):
+    tmp_path, fake = _isolated
+    _write_build(tmp_path, "wf_broken")
+    _write_gate(tmp_path, "wf_broken", script_passes=False)
+
+    before = _existing_session_files()
+    asyncio.run(_run("wf_broken"))
+
+    doc = _session_doc(before)
+    verif_events = [e for e in doc["trace"] if e["type"] == "verification"]
+    retry_events = [e for e in doc["trace"] if e["type"] == "retry"]
+
+    assert len(verif_events) == 1 + rw._MAX_REPAIR_ATTEMPTS
+    assert all(e["data"]["passed"] is False for e in verif_events)
+    # A retry follows every failing attempt except the last (budget exhausted).
+    assert len(retry_events) == rw._MAX_REPAIR_ATTEMPTS
+    assert [e["data"]["attempt"] for e in retry_events] == list(
+        range(1, rw._MAX_REPAIR_ATTEMPTS + 1)
+    )

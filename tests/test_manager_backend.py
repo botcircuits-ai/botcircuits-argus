@@ -136,6 +136,55 @@ def test_get_session_returns_full_document(manager):
     ]
 
 
+def test_list_sessions_gate_summary_none_when_no_gate(manager):
+    client, sessions = manager
+    _write_session(sessions, "nogate", name="wf_nogate", end="2026-01-01T01:00:00Z", status="done")
+    r = client.get("/api/sessions", headers=_auth_header(client))
+    by_id = {s["session_id"]: s for s in r.json()}
+    assert by_id["nogate"]["gate"] is None
+
+
+def test_list_sessions_gate_summary_reflects_repair_loop(manager):
+    client, sessions = manager
+    doc = {
+        "session_id": "gated",
+        "agent": {"runtime": "claude-code"},
+        "workflow": {"name": "wf_gated", "start": "2026-01-01T00:00:00Z",
+                     "end": "2026-01-01T01:00:00Z", "initial_slots": {}},
+        "trace": [
+            {"seq": 0, "ts": "t", "type": "session_start", "step": None,
+             "duration_ms": None, "slots": {}, "data": {}},
+            {"seq": 1, "ts": "t", "type": "verification", "step": None,
+             "duration_ms": None, "slots": {}, "data": {
+                 "attempt": 1, "workflow_name": "wf_gated", "passed": False,
+                 "checks": [{"id": "chk", "passed": False, "severity": "blocking",
+                             "detail": "", "error": "boom"}],
+             }},
+            {"seq": 2, "ts": "t", "type": "retry", "step": None,
+             "duration_ms": None, "slots": {}, "data": {
+                 "attempt": 1, "max_attempts": 2, "reason": ["chk: boom"],
+             }},
+            {"seq": 3, "ts": "t", "type": "verification", "step": None,
+             "duration_ms": None, "slots": {}, "data": {
+                 "attempt": 2, "workflow_name": "wf_gated", "passed": True,
+                 "checks": [{"id": "chk", "passed": True, "severity": "blocking",
+                             "detail": "", "error": None}],
+             }},
+            {"seq": 4, "ts": "t", "type": "session_end", "step": None,
+             "duration_ms": None, "slots": {}, "data": {"status": "done"}},
+        ],
+        "memory": {"nodes": [], "edges": []},
+    }
+    (sessions / "gated-session.json").write_text(json.dumps(doc))
+
+    r = client.get("/api/sessions", headers=_auth_header(client))
+    gate = next(s["gate"] for s in r.json() if s["session_id"] == "gated")
+    assert gate["passed"] is True
+    assert gate["attempts"] == 2
+    assert gate["retries"] == 1
+    assert gate["checks"][0]["id"] == "chk"
+
+
 def test_get_missing_session_404(manager):
     client, _ = manager
     r = client.get("/api/sessions/does-not-exist", headers=_auth_header(client))
