@@ -197,20 +197,28 @@ def static_issues(doc: dict, *, base_dir: Path | None = None) -> list[str]:
                             f"'{src['file']}'. Use the exact key that holds the "
                             "item array.")
 
-            # On a listDecision, the conditions' `next` and the default `next`
-            # are the per-item OUTCOME LABELS — they become the decision word
-            # for each item (decisionKey). They must be REAL outcomes
-            # (fulfill/backorder/reject/...), not:
+            # On a listDecision, the conditions' `next` are the per-item
+            # OUTCOME LABELS — they become the decision word for each item
+            # (decisionKey). They must be REAL outcomes (fulfill/backorder/
+            # reject/...), not:
             #   * a generic placeholder (completed/done/output/...), or
             #   * a STEP NAME (e.g. 'finalize_output', 'emit_result') — a common
             #     generator slip that conflates "the decision word" with "where
-            #     to go next". A listDecision doesn't navigate to a next step per
-            #     item; its `next` IS the default decision label.
+            #     to go next".
+            #
+            # The step's OWN `next` is different: when `defaultNext` is also
+            # present, `defaultNext` carries the fallback decision word and
+            # `next` is legitimately the real step the flow continues to once
+            # the whole list is decided (see the authoring skill's `listDecision`
+            # contract) — so it must NOT be checked as a label in that case.
+            # Only a `next` with no `defaultNext` is ambiguous enough to still
+            # be treated as the (possibly mis-authored) default decision label.
             _GENERIC = {"completed", "complete", "done", "next", "end",
                         "finish", "finished", "output", "result", "finalize",
                         "emit", "continue", "proceed", "default"}
             labels = [c.get("next") for c in step.get("conditions") or []]
-            labels.append(step.get("next"))
+            if not step.get("defaultNext"):
+                labels.append(step.get("next"))
             for lbl in labels:
                 if not isinstance(lbl, str) or not lbl:
                     continue

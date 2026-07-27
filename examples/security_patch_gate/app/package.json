@@ -1,0 +1,10 @@
+{
+  "name": "security-patch-gate-demo-app",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Zero-dependency demo login API for the security_patch_gate workflow example.",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  }
+}

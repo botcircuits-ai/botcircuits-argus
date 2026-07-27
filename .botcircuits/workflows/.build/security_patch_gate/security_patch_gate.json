@@ -1,0 +1,93 @@
+{
+  "name": "security_patch_gate",
+  "description": "Load one reported security finding, auto-patch the vulnerable source file if approved, and write a patch report. The build's generated verification gate runs the application's own unit test suite (npm test) as the blocking check that the fix is both correct and non-regressive.",
+  "flow": {
+    "start": "start",
+    "steps": {
+      "start": {
+        "type": "start",
+        "next": "load_finding"
+      },
+      "load_finding": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Read examples/security_patch_gate/config/finding.json. Set slots: finding_id, repo, file, function, severity, title, description, remediation_hint, approved_for_auto_patch."
+        },
+        "next": "write_abort_report",
+        "conditions": [
+          {
+            "condition": "approved_for_auto_patch is true",
+            "next": "patch_vulnerability",
+            "expCondition": "approved_for_auto_patch is true"
+          }
+        ],
+        "choices": [
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "approved_for_auto_patch",
+                "operator": "is",
+                "value": true
+              }
+            ],
+            "next": "patch_vulnerability"
+          }
+        ]
+      },
+      "patch_vulnerability": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Open examples/security_patch_gate/<file slot>. Apply minimal fix for the vulnerability per description/remediation_hint; do not restructure unrelated code. Save in place. Set patch_summary slot: short description of exact change made."
+        },
+        "next": "write_patch_report"
+      },
+      "write_patch_report": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Write examples/security_patch_gate/patch-report-<today, YYYY-MM-DD>.json with finding_id, patched file, patch_summary, status: 'patched'."
+        }
+      },
+      "write_abort_report": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Write examples/security_patch_gate/patch-abort-<today, YYYY-MM-DD>.json with finding_id, status: 'aborted', reason: 'not approved_for_auto_patch'."
+        }
+      }
+    },
+    "variables": [
+      {
+        "variableName": "approved_for_auto_patch",
+        "dataType": "boolean",
+        "description": "Flag from the finding JSON indicating whether the security finding is approved for automatic patching."
+      }
+    ],
+    "segments": [
+      {
+        "id": "start",
+        "steps": [
+          "load_finding"
+        ],
+        "branchStep": "load_finding",
+        "agent": null
+      },
+      {
+        "id": "patch_vulnerability",
+        "steps": [
+          "patch_vulnerability",
+          "write_patch_report"
+        ],
+        "branchStep": null,
+        "agent": null
+      },
+      {
+        "id": "write_abort_report",
+        "steps": [
+          "write_abort_report"
+        ],
+        "branchStep": null,
+        "agent": null
+      }
+    ]
+  }
+}
