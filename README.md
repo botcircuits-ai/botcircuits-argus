@@ -1,21 +1,19 @@
 <h1 align="center">Argus</h1>
 
 <p align="center">
-  <strong>Graph engineering for AI agents — with the routing compiled ahead of time.</strong>
+  <strong>Enforce structure where it must hold. Reason only where it's needed.</strong>
 </p>
 
 ---
 
-Argus lets AI agents (Claude Code, Hermes, Codex, OpenClaw) execute your processes as a graph: nodes that do the work, edges that route between them, and shared state flowing along those edges. 
-
-In Argus, the edges are compiled into a deterministic flow before the first run. so the model does the work, and the graph does the routing.
+An agent skill (Claude, Hermes, etc.) that runs your repetitive workflows **predictably**, **traceably**, and **cost-efficiently** — cutting **~80%** of tokens usage while keeping full accuracy.
 
 ![botcircuits-agent-solution](docs/solution.png)
 
 <p align="center">
+  <img alt="Tokens Saved" src="https://img.shields.io/badge/Tokens_Saved-80%25-brightgreen?style=for-the-badge">
   <img alt="Consistency" src="https://img.shields.io/badge/Consistency-1.00-brightgreen?style=for-the-badge">
   <img alt="Decision Accuracy" src="https://img.shields.io/badge/Decision_Accuracy-100%25-brightgreen?style=for-the-badge">
-  <img alt="Tokens Saved" src="https://img.shields.io/badge/Tokens_Saved-80%25-brightgreen?style=for-the-badge">
   <img alt="Run Latency" src="https://img.shields.io/badge/Run_Latency-1.4x_faster-blue?style=for-the-badge">
 </p>
 <p align="center"><sub>measured across 4 use cases · see <a href="#benchmark">Benchmark</a></sub></p>
@@ -27,42 +25,18 @@ In Argus, the edges are compiled into a deterministic flow before the first run.
 ## Stateful memory context
 **Provide only the context that matters**. Argus tracks state changes and supplies the agent with the exact memory needed for the current step, improving reliability while reducing token usage.
 
-```
-claude > "create a pr review workflow: audit the diff for security, and logic.
-          converge the findings. apply fixes. run the test suite. merge if it passes,
-          otherwise loop back to the fixer"
-claude > "run pr review for PR #482"
-```
 ---
 
-## Why a graph at all
- 
-A agent in a loop re-derives its plan on every turn. It re-reads the whole context, re-reasons about what to do next, and reaches a slightly different conclusion each time. 
+## How it works
 
-the LLM reads the state, decides which branch to take, and you're paying tokens and nondeterminism at every junction
- 
-Argus draws the line differently:
- 
-| | Node | Edge |
+Argus ships **two skills** your agent loads:
+
+| Skill | The user says… | The agent does… |
 |---|---|---|
-| **Who decides** | The AI agent | The deterministic engine |
-| **What it does** | Calls tools, reads APIs, writes results | Evaluates a compiled rule, picks the next node |
-| **Varies run to run** | Yes | No |
- 
-**The agent is the worker, not the router.** Same inputs, same path, every time.
+| **botcircuits-workflow-authoring** | _"create an order fulfillment workflow with …"_ | Writes the workflow JSON and **builds** it into a runnable state machine. |
+| **botcircuits-workflow-running** | _"run order fulfillment"_ | Runs the workflow — the **deterministic engine** drives navigation in the background and dispatches each action to the AI agent. |
 
 ---
-
-## The three primitives
- 
-### Nodes — where the model works
-Each node is one unit of work: an `agentAction` the host agent carries out, a `question` that collects input. A node receives only the state it declares. not the whole conversation and returns its result into shared state.
- 
-### Edges — compiled, not interpreted
-You author edges in plain business language (`"all items are in stock"`). A build step compiles each one into a concrete `choices[]` rule the engine evaluates identically on every run. **No LLM interpretation happens at navigation time.** This is the core claim of the Argus, and it's what makes runs reproducible and auditable.
- 
-### State — scoped along the edges
-The build aggregates a `flow.variables` list across the whole graph, so the engine knows exactly what each node reads and writes. Instead of dragging a growing context window through every step, Argus hands each node just the variables it needs.
 
 ## Installation
 
@@ -145,13 +119,12 @@ When you build a workflow, **workflow-builder**:
 
 - **Compiles each natural-language `condition`** (e.g. `"all items are in stock"`) into a deterministic `choices[]` entry — a concrete rule the engine evaluates the same way every time, with no model interpretation at navigation time.
 - **Aggregates a `flow.variables` list** across all steps, so the engine knows exactly which variables the workflow reads and writes and can supply the agent only the context needed for the next step.
-- **Writes the runnable copy** to `.botcircuits/workflows/.build/<name>/<name>.json`.
-- **Generates a verification gate** — deterministic script checks and/or LLM-judge checks, derived from the workflow's declared result/variables, written to `.botcircuits/workflows/.build/<name>/verifications/`. This runs automatically on every build; you don't author it by hand.
+- **Writes the runnable copy** to `.botcircuits/workflows/.build/<name>.json`.
 
 #### Where files live
 
 - `.botcircuits/workflows/*.json` — your authored sources, the editable source of truth (override the dir with `BOTCIRCUITS_WORKFLOWS_DIR`).
-- `.botcircuits/workflows/.build/<name>/` — this workflow's built, runnable copy plus its verification gate. **This is the only thing the runtime loads.**
+- `.botcircuits/workflows/.build/` — built, runnable copies. **This is the only thing the runtime loads.**
 - `.botcircuits/workflows/.runs/` — transient pause/resume cursors for in-progress runs.
 
 ### 3. Running
@@ -163,8 +136,6 @@ claude > "run order fulfillment for order #1024"
 > Same thing inside Hermes (`hermes "run order fulfillment …"`). The host agent follows the skills and shells out to the `botcircuits` CLI for you.
 
 **What the build buys you at run time:** because navigation was compiled ahead of time, the **deterministic engine** — not the AI — decides which step comes next. The engine loads the built workflow from `.build/`, walks the state machine step by step, evaluates the compiled `choices[]` to pick each branch, and dispatches only the current action to the AI agent along with just the variables that step needs. The result: the same inputs always follow the same path, every step is traceable, and the agent never burns tokens reasoning about routing.
-
-**Self-repair:** if the workflow has a verification gate, `workflow run` checks the finished run's outcome against it automatically. A failing gate triggers an automatic retry of the whole workflow — with the failure fed back as context — up to a small fixed number of attempts, before the run is reported as a genuine `failure`. Workflows with no gate are unaffected.
 
 You can also run directly via the CLI:
 
