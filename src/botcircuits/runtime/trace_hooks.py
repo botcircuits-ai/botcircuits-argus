@@ -62,8 +62,16 @@ class _TracingProvider(AgentRuntimeProvider):
         slots: dict[str, Any],
         item_variables: list[dict] | None = None,
         data_variables: list[dict] | None = None,
+        agent: str | None = None,
         event_sink: EventSink | None = None,
     ) -> SegmentResult:
+        # A multiplexed inner provider resolves the RUNTIME per segment from
+        # `agent` (see `MultiplexRuntime`), so `self.name` (fixed at wrap time
+        # to the outer provider's own name, e.g. "multiplex") isn't the
+        # runtime that actually serves THIS segment. Best-effort per-segment
+        # lookup; falls back to `self.name` for a plain (non-multiplexed)
+        # provider.
+        runtime_name = self._runtime_for(agent)
         # The action(s) about to run on the sub-agent, plus the slot context
         # at this exact moment — the "input" half of the sub-agent execution.
         self._trace.event(
@@ -75,7 +83,7 @@ class _TracingProvider(AgentRuntimeProvider):
                 "data_variables": [
                     v.get("variableName") for v in (data_variables or [])
                 ],
-                "runtime": self.name,
+                "runtime": runtime_name,
             },
         )
         t = timer()
@@ -86,6 +94,7 @@ class _TracingProvider(AgentRuntimeProvider):
             slots=slots,
             item_variables=item_variables,
             data_variables=data_variables,
+            agent=agent,
             event_sink=event_sink,
         )
         self._trace.event(
@@ -95,10 +104,25 @@ class _TracingProvider(AgentRuntimeProvider):
             data={
                 "input": {"actions": list(actions)},
                 "output": _segment_output(seg),
-                "runtime": self.name,
+                "runtime": runtime_name,
             },
         )
         return seg
+
+    def _runtime_for(self, agent: str | None) -> str:
+        """The runtime name actually serving `agent` on `self._inner`.
+
+        `self._inner` may be a `MultiplexRuntime` (its `agent_runtime` map
+        + `by_runtime` instances know the real per-agent runtime) or a plain
+        single-runtime provider (`self.name` is already correct for every
+        agent in that case)."""
+        agent_runtime = getattr(self._inner, "agent_runtime", None)
+        by_runtime = getattr(self._inner, "by_runtime", None)
+        if agent and isinstance(agent_runtime, dict) and isinstance(by_runtime, dict):
+            rt_name = agent_runtime.get(agent)
+            if rt_name is not None and rt_name in by_runtime:
+                return rt_name
+        return self.name
 
     async def resolve_slots(
         self,

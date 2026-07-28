@@ -295,17 +295,20 @@ def _record_memory_graph(
 
 
 def _select_provider(
-    flow: dict, *, settings: dict | None, resolved_name: str,
+    record: dict, *, settings: dict | None, resolved_name: str,
 ):
     """Build the runtime provider for this run, honoring a per-agent
     `agents` map on the workflow (`{name: {runtime?, model?}}`).
+
+    `record` is the whole workflow document (`agents` lives at its top
+    level, alongside `flow` — NOT inside `flow` itself).
 
     Steps with no `agent` always use the run's default (`resolved_name`) —
     identical to today's behavior. When the workflow declares no `agents` at
     all, this returns exactly what `select_runtime` alone would: no
     multiplexing overhead for the common case.
     """
-    agents_map = flow.get("agents")
+    agents_map = record.get("agents")
     if not isinstance(agents_map, dict) or not agents_map:
         return select_runtime(settings=settings, name=resolved_name)
 
@@ -398,7 +401,7 @@ async def _run(
     settings = None
     if runtime_command:
         settings = {"runtimes": {resolved_name: {"command": runtime_command}}}
-    provider = _select_provider(flow, settings=settings, resolved_name=resolved_name)
+    provider = _select_provider(record, settings=settings, resolved_name=resolved_name)
 
     # Resume from a persisted pause if this is a --reply continuation.
     saved = _load_state(name) if reply is not None else {}
