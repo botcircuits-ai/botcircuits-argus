@@ -82,7 +82,7 @@ def _branching_record() -> dict:
 
 
 def _write_build(tmp_path, record: dict) -> None:
-    build = tmp_path / ".build"
+    build = tmp_path / ".build" / record["name"]
     build.mkdir(parents=True, exist_ok=True)
     (build / f"{record['name']}.json").write_text(
         json.dumps(record), encoding="utf-8"

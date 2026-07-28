@@ -1,0 +1,40 @@
+{
+  "workflow_name": "security_patch_gate",
+  "version": 1,
+  "checks": [
+    {
+      "id": "required_finding_fields_present",
+      "type": "script",
+      "description": "Verifies load_finding populated all required identification/context slots (finding_id, repo, file, severity, title, description) with non-empty string values.",
+      "script": "verifications/checks/required_finding_fields_present.py",
+      "severity": "blocking"
+    },
+    {
+      "id": "approved_flag_is_boolean",
+      "type": "script",
+      "description": "Verifies approved_for_auto_patch was set to an actual boolean (not a missing value or a string like 'true'/'false'), since the downstream patch/abort branch depends on it.",
+      "script": "verifications/checks/approved_flag_is_boolean.py",
+      "severity": "blocking"
+    },
+    {
+      "id": "patch_action_matches_approval",
+      "type": "script",
+      "description": "Verifies the workflow only actually patched (non-empty patch_summary) when approved_for_auto_patch is true, and did not patch when it is false, catching a run that patches an unapproved finding or skips patching an approved one.",
+      "script": "verifications/checks/patch_action_matches_approval.py",
+      "severity": "blocking"
+    },
+    {
+      "id": "patch_summary_is_minimal_and_relevant",
+      "type": "llm_judge",
+      "description": "Judges whether, when a patch was applied, patch_summary describes a minimal, targeted fix that actually addresses the vulnerability in description/remediation_hint, rather than a vague, unrelated, or overly broad change.",
+      "rubric": "Given slots.approved_for_auto_patch, slots.description, slots.remediation_hint, and slots.patch_summary: if approved_for_auto_patch is true, patch_summary must clearly and specifically describe a code change that addresses the vulnerability described in description/remediation_hint (not a generic statement like 'fixed the bug'), and must not indicate restructuring or changes unrelated to the vulnerability. If approved_for_auto_patch is false, this check should pass trivially (nothing to judge). Fail if the patch appears mismatched with the described vulnerability, vague, or scoped beyond a minimal fix.",
+      "inputs": [
+        "slots.approved_for_auto_patch",
+        "slots.description",
+        "slots.remediation_hint",
+        "slots.patch_summary"
+      ],
+      "severity": "blocking"
+    }
+  ]
+}

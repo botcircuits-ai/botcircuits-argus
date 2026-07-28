@@ -36,6 +36,25 @@ def _read(path: Path) -> dict[str, Any] | None:
     return doc if isinstance(doc, dict) else None
 
 
+def _gate_summary(trace: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Fold a session's `verification`/`retry` events into a compact verdict:
+    the last gate evaluation's pass/fail, how many evaluations ran, and how
+    many repair retries were triggered. `None` when the workflow has no gate
+    (no `verification` events at all) — distinct from a gate that ran and
+    passed, so the UI can tell "no gate configured" from "gate passed"."""
+    verifications = [e for e in trace if e.get("type") == "verification"]
+    if not verifications:
+        return None
+    retries = [e for e in trace if e.get("type") == "retry"]
+    last = verifications[-1].get("data") or {}
+    return {
+        "passed": bool(last.get("passed")),
+        "attempts": len(verifications),
+        "retries": len(retries),
+        "checks": last.get("checks") or [],
+    }
+
+
 def _summary(doc: dict[str, Any], *, mtime: float) -> dict[str, Any]:
     """The compact record the list endpoint returns (no full trace)."""
     wf = doc.get("workflow") or {}
@@ -62,6 +81,7 @@ def _summary(doc: dict[str, Any], *, mtime: float) -> dict[str, Any]:
         "status": status,
         "event_count": len(trace),
         "updated_at": mtime,
+        "gate": _gate_summary(trace),
     }
 
 
@@ -96,4 +116,40 @@ def get_session(session_id: str) -> dict[str, Any] | None:
     return _read(path)
 
 
-__all__ = ["sessions_dir", "list_sessions", "get_session", "SESSIONS_DIR_ENV"]
+def latest_gate_by_workflow() -> dict[str, dict[str, Any]]:
+    """The gate verdict from each workflow's MOST RECENT session, keyed by
+    workflow name. Used by the workflow list endpoint so it can show "did the
+    last run pass verification" without the caller reading session files
+    itself. Sessions with no gate (no `verification` events) are skipped —
+    they leave the workflow absent from the map rather than reporting a
+    false verdict."""
+    out: dict[str, dict[str, Any]] = {}
+    latest_mtime: dict[str, float] = {}
+    d = sessions_dir()
+    if not d.is_dir():
+        return out
+    for path in d.glob(f"*{_SESSION_SUFFIX}"):
+        doc = _read(path)
+        if doc is None:
+            continue
+        name = (doc.get("workflow") or {}).get("name")
+        if not name:
+            continue
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        if name in latest_mtime and mtime <= latest_mtime[name]:
+            continue
+        gate = _gate_summary(doc.get("trace") or [])
+        if gate is None:
+            continue
+        latest_mtime[name] = mtime
+        out[name] = gate
+    return out
+
+
+__all__ = [
+    "sessions_dir", "list_sessions", "get_session", "latest_gate_by_workflow",
+    "SESSIONS_DIR_ENV",
+]

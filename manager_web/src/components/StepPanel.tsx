@@ -1,10 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ExpandIcon, PlusIcon, TrashIcon } from "@/components/icons";
+import { ExpandIcon, ForkIcon, PlusIcon, TrashIcon } from "@/components/icons";
 import {
   AGENT_RUNTIMES,
   api,
+  STEP_TYPE_AGENT_ACTION,
+  STEP_TYPE_PARALLEL,
+  SUPPORTED_STEP_TYPES,
   type AgentConfig,
   type ModelCatalog,
   type WorkflowDoc,
@@ -36,8 +39,14 @@ function providerFor(runtime: string | undefined, provider: string | undefined):
  *
  * Every mutation produces a NEW `WorkflowDoc` handed back via `onChange`, so
  * the parent's doc stays the single source of truth and the JSON view syncs.
- * The UI editor only authors `agentAction` today, so the step type is implicit
- * and not shown.
+ * The UI editor authors `agentAction` and `parallel` (`SUPPORTED_STEP_TYPES`);
+ * other step types (question, systemAction, listDecision) are still CLI/skill-
+ * authored only and just render read-only if opened here.
+ *
+ * A `parallel` step's own settings are just its join point (`next`) and
+ * `onError` route, plus branch NAMES — the step chain inside each branch is
+ * authored on the CANVAS (drag a connection from the parallel node to start
+ * or extend a branch), not picked from a list here.
  */
 export function StepPanel({
   doc,
@@ -237,8 +246,10 @@ export function StepPanel({
               id={selectedStep}
               step={step}
               stepIds={stepIds}
+              steps={steps}
               agentNames={agentNames}
               isStart={doc.flow?.start === selectedStep || step.type === "start"}
+              onSelectStep={onSelectStep}
               onRename={(newId) => {
                 if (!newId || newId === selectedStep || steps[newId]) return;
                 mutate((s) => {
@@ -247,9 +258,17 @@ export function StepPanel({
                   s[newId] = { ...old, id: newId };
                   for (const v of Object.values(s)) {
                     if (v.next === selectedStep) v.next = newId;
+                    if (v.onError === selectedStep) v.onError = newId;
                     if (v.conditions)
                       v.conditions = v.conditions.map((c) =>
                         c.next === selectedStep ? { ...c, next: newId } : c,
+                      );
+                    if (v.branches)
+                      v.branches = Object.fromEntries(
+                        Object.entries(v.branches).map(([branch, chain]) => [
+                          branch,
+                          chain.map((sid) => (sid === selectedStep ? newId : sid)),
+                        ]),
                       );
                   }
                 });
@@ -377,25 +396,40 @@ function StepFields({
   id,
   step,
   stepIds,
+  steps,
   agentNames,
   isStart,
   onRename,
   onUpdate,
   onDelete,
+  onSelectStep,
 }: {
   id: string;
   step: WorkflowStep;
   stepIds: string[];
+  steps: Record<string, WorkflowStep>;
   agentNames: string[];
   isStart: boolean;
   onRename: (id: string) => void;
   onUpdate: (patch: Partial<WorkflowStep>) => void;
   onDelete: () => void;
+  onSelectStep: (id: string) => void;
 }) {
   const [idDraft, setIdDraft] = useState(id);
   useEffect(() => setIdDraft(id), [id]);
   const conditions = step.conditions ?? [];
   const targets = stepIds.filter((s) => s !== id);
+  const type = step.type ?? STEP_TYPE_AGENT_ACTION;
+  const isParallel = type === STEP_TYPE_PARALLEL;
+
+  // Every step id already claimed by SOME parallel step's branches — used to
+  // warn when "Default next" / "On error" points at a step that's mid-chain
+  // inside a branch (those are reached only via the branch, not directly).
+  const branchMemberIds = new Set(
+    Object.values(steps).flatMap((s) =>
+      s.type === STEP_TYPE_PARALLEL ? Object.values(s.branches ?? {}).flat() : [],
+    ),
+  );
 
   return (
     <div className="space-y-3">
@@ -413,6 +447,40 @@ function StepFields({
       </Field>
 
       {!isStart && (
+        <Field label="Type">
+          <select
+            value={type}
+            onChange={(e) => {
+              const nextType = e.target.value;
+              if (nextType === STEP_TYPE_PARALLEL) {
+                // Switching TO parallel: drop the agentAction-shaped fields
+                // that no longer apply (an empty `branches` map is added so
+                // the panel immediately shows the "Add branch" empty state).
+                onUpdate({
+                  type: nextType,
+                  settings: undefined,
+                  conditions: undefined,
+                  agent: undefined,
+                  branches: step.branches ?? {},
+                });
+              } else {
+                // Switching AWAY from parallel: drop branch/onError data —
+                // it has no meaning for any other step type.
+                onUpdate({ type: nextType, branches: undefined, onError: undefined });
+              }
+            }}
+            className="w-full rounded-lg border border-border bg-bg px-2 h-9 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-brand/40"
+          >
+            {SUPPORTED_STEP_TYPES.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+
+      {!isStart && !isParallel && (
         <Field label="Action">
           <ExpandableTextarea
             value={step.settings?.action ?? ""}
@@ -426,7 +494,7 @@ function StepFields({
         </Field>
       )}
 
-      {!isStart && (
+      {!isStart && !isParallel && (
         <Field label="Model">
           <select
             value={step.agent ?? ""}
@@ -449,83 +517,119 @@ function StepFields({
         </Field>
       )}
 
-      <Field label="Default next (otherwise)">
+      <Field label={isParallel ? "Default next (after every branch finishes)" : "Default next (otherwise)"}>
         <select
           value={step.next ?? ""}
           onChange={(e) => onUpdate({ next: e.target.value })}
           className="w-full rounded-lg border border-border bg-bg px-2 h-9 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-brand/40"
         >
           <option value="">— terminal —</option>
-          {targets.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
+          {targets
+            .filter((t) => !branchMemberIds.has(t))
+            .map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
         </select>
       </Field>
 
-      <div>
-        <div className="flex items-center justify-between mb-1.5">
-          <label className="text-xs font-medium uppercase tracking-wide text-muted">
-            Conditions
-          </label>
-          <button
-            onClick={() =>
-              onUpdate({ conditions: [...conditions, { condition: "", next: "" }] })
-            }
-            className="inline-flex items-center gap-1 text-xs text-brand-600 dark:text-brand-400 hover:bg-elevated rounded-md px-1.5 py-1"
-          >
-            <PlusIcon className="w-3.5 h-3.5" /> Add
-          </button>
-        </div>
-        <div className="space-y-2">
-          {conditions.map((c, i) => (
-            <div key={i} className="rounded-lg border border-border p-2 space-y-1.5">
-              <input
-                value={c.condition}
-                onChange={(e) => {
-                  const next = [...conditions];
-                  next[i] = { ...c, condition: e.target.value };
-                  onUpdate({ conditions: next });
-                }}
-                placeholder="natural-language test"
-                className="w-full rounded-md border border-border bg-bg px-2 h-8 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-brand/40"
-              />
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs text-muted">→</span>
-                <select
-                  value={c.next}
+      {isParallel && (
+        <>
+          <Field label="On error (optional)">
+            <select
+              value={step.onError ?? ""}
+              onChange={(e) => onUpdate({ onError: e.target.value || undefined })}
+              className="w-full rounded-lg border border-border bg-bg px-2 h-9 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-brand/40"
+            >
+              <option value="">— fail the run —</option>
+              {targets
+                .filter((t) => !branchMemberIds.has(t))
+                .map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+            </select>
+            <p className="mt-1 text-xs text-muted">
+              Where to route if any branch fails. Left empty, a failure stops
+              the run.
+            </p>
+          </Field>
+          <BranchesField
+            id={id}
+            branches={step.branches ?? {}}
+            steps={steps}
+            onUpdate={onUpdate}
+            onSelectStep={onSelectStep}
+          />
+        </>
+      )}
+
+      {!isParallel && (
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs font-medium uppercase tracking-wide text-muted">
+              Conditions
+            </label>
+            <button
+              onClick={() =>
+                onUpdate({ conditions: [...conditions, { condition: "", next: "" }] })
+              }
+              className="inline-flex items-center gap-1 text-xs text-brand-600 dark:text-brand-400 hover:bg-elevated rounded-md px-1.5 py-1"
+            >
+              <PlusIcon className="w-3.5 h-3.5" /> Add
+            </button>
+          </div>
+          <div className="space-y-2">
+            {conditions.map((c, i) => (
+              <div key={i} className="rounded-lg border border-border p-2 space-y-1.5">
+                <input
+                  value={c.condition}
                   onChange={(e) => {
                     const next = [...conditions];
-                    next[i] = { ...c, next: e.target.value };
+                    next[i] = { ...c, condition: e.target.value };
                     onUpdate({ conditions: next });
                   }}
-                  className="flex-1 rounded-md border border-border bg-bg px-2 h-8 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-brand/40"
-                >
-                  <option value="">— pick step —</option>
-                  {targets.map((t) => (
-                    <option key={t} value={t}>
-                      {t}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  onClick={() => onUpdate({ conditions: conditions.filter((_, j) => j !== i) })}
-                  className="text-muted hover:text-danger rounded-md p-1"
-                  aria-label="Remove condition"
-                >
-                  <TrashIcon className="w-4 h-4" />
-                </button>
+                  placeholder="natural-language test"
+                  className="w-full rounded-md border border-border bg-bg px-2 h-8 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-brand/40"
+                />
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs text-muted">→</span>
+                  <select
+                    value={c.next}
+                    onChange={(e) => {
+                      const next = [...conditions];
+                      next[i] = { ...c, next: e.target.value };
+                      onUpdate({ conditions: next });
+                    }}
+                    className="flex-1 rounded-md border border-border bg-bg px-2 h-8 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-brand/40"
+                  >
+                    <option value="">— pick step —</option>
+                    {targets.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => onUpdate({ conditions: conditions.filter((_, j) => j !== i) })}
+                    className="text-muted hover:text-danger rounded-md p-1"
+                    aria-label="Remove condition"
+                  >
+                    <TrashIcon className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
-            </div>
-          ))}
-          {conditions.length === 0 && (
-            <p className="text-xs text-muted">
-              No branches — this step always goes to its default next.
-            </p>
-          )}
+            ))}
+            {conditions.length === 0 && (
+              <p className="text-xs text-muted">
+                No branches — this step always goes to its default next.
+              </p>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {!isStart && (
         <button
@@ -534,6 +638,159 @@ function StepFields({
         >
           <TrashIcon className="w-4 h-4" /> Delete step
         </button>
+      )}
+    </div>
+  );
+}
+
+/** Branch list for a `parallel` step's Step settings. Names branches and
+ * shows each one's current step chain (read-only preview — click a step id
+ * to jump to it); the chain ITSELF is authored on the canvas by dragging a
+ * connection from the parallel node (or from the last step already in a
+ * branch) — see `WorkflowEditor.connectSteps`. "Add branch" creates an empty,
+ * chainless branch entry ready for the first canvas connection. */
+function BranchesField({
+  id,
+  branches,
+  steps,
+  onUpdate,
+  onSelectStep,
+}: {
+  id: string;
+  branches: Record<string, string[]>;
+  steps: Record<string, WorkflowStep>;
+  onUpdate: (patch: Partial<WorkflowStep>) => void;
+  onSelectStep: (id: string) => void;
+}) {
+  const names = Object.keys(branches);
+
+  const addBranch = () => {
+    let n = names.length + 1;
+    let name = `branch_${n}`;
+    while (branches[name]) name = `branch_${++n}`;
+    onUpdate({ branches: { ...branches, [name]: [] } });
+  };
+
+  const renameBranch = (oldName: string, newName: string) => {
+    if (!newName || newName === oldName || branches[newName]) return;
+    const next = { ...branches };
+    next[newName] = next[oldName];
+    delete next[oldName];
+    onUpdate({ branches: next });
+  };
+
+  const deleteBranch = (name: string) => {
+    const next = { ...branches };
+    delete next[name];
+    onUpdate({ branches: next });
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1.5">
+        <label className="text-xs font-medium uppercase tracking-wide text-muted">
+          Branches ({names.length})
+        </label>
+        <button
+          onClick={addBranch}
+          className="inline-flex items-center gap-1 text-xs text-brand-600 dark:text-brand-400 hover:bg-elevated rounded-md px-1.5 py-1"
+        >
+          <PlusIcon className="w-3.5 h-3.5" /> Add branch
+        </button>
+      </div>
+      <div className="space-y-2">
+        {names.map((name) => (
+          <BranchRow
+            key={name}
+            name={name}
+            chain={branches[name] ?? []}
+            steps={steps}
+            onRename={(next) => renameBranch(name, next)}
+            onDelete={() => deleteBranch(name)}
+            onSelectStep={onSelectStep}
+          />
+        ))}
+        {names.length === 0 && (
+          <p className="text-xs text-muted">
+            No branches yet. Add one, then drag a connection from this node
+            on the canvas to start its step chain.
+          </p>
+        )}
+      </div>
+      <p className="mt-2 text-xs text-muted">
+        <ForkIcon className="inline w-3 h-3 -mt-0.5 mr-1 text-violet-500 dark:text-violet-400" />
+        Drag from <span className="font-mono">{id}</span> on the canvas to add
+        a step to an empty branch; drag from a branch's last step to extend
+        its chain.
+      </p>
+    </div>
+  );
+}
+
+function BranchRow({
+  name,
+  chain,
+  steps,
+  onRename,
+  onDelete,
+  onSelectStep,
+}: {
+  name: string;
+  chain: string[];
+  steps: Record<string, WorkflowStep>;
+  onRename: (next: string) => void;
+  onDelete: () => void;
+  onSelectStep: (id: string) => void;
+}) {
+  const [nameDraft, setNameDraft] = useState(name);
+  useEffect(() => setNameDraft(name), [name]);
+
+  return (
+    <div className="rounded-lg border border-border p-2 space-y-1.5">
+      <div className="flex items-center gap-1.5">
+        <input
+          value={nameDraft}
+          onChange={(e) => setNameDraft(e.target.value)}
+          onBlur={() => {
+            const next = nameDraft.trim();
+            if (!next || next === name) setNameDraft(name);
+            else onRename(next);
+          }}
+          placeholder="branch name"
+          className="flex-1 min-w-0 rounded-md border border-border bg-bg px-2 h-8 text-sm font-mono text-fg focus:outline-none focus:ring-2 focus:ring-brand/40"
+        />
+        <button
+          onClick={onDelete}
+          className="text-muted hover:text-danger rounded-md p-1"
+          aria-label={`Remove branch ${name}`}
+        >
+          <TrashIcon className="w-4 h-4" />
+        </button>
+      </div>
+      {chain.length === 0 ? (
+        <p className="text-xs text-muted">
+          No steps yet — drag a connection here from the canvas.
+        </p>
+      ) : (
+        <div className="flex flex-wrap items-center gap-1 text-xs">
+          {chain.map((stepId, i) => (
+            <span key={stepId} className="flex items-center gap-1">
+              {i > 0 && <span className="text-muted">→</span>}
+              <button
+                onClick={() => onSelectStep(stepId)}
+                className={cx(
+                  "font-mono rounded px-1.5 py-0.5",
+                  steps[stepId]
+                    ? "bg-violet-500/10 text-violet-600 dark:text-violet-400 hover:bg-violet-500/20"
+                    : "bg-danger/10 text-danger",
+                )}
+                title={steps[stepId] ? "Jump to step" : "This step no longer exists"}
+              >
+                {stepId}
+              </button>
+            </span>
+          ))}
+        </div>
       )}
     </div>
   );

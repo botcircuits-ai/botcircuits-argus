@@ -42,12 +42,13 @@ from botcircuits.agent.workflow.evaluation import (
     run_evaluation_datasets,
     write_json_report,
 )
-from botcircuits.agent.workflow.local import (
+from botcircuits.agent.workflow.local import LocalWorkflowError
+from botcircuits.agent.workflow.paths import (
     DEFAULT_WORKFLOWS_DIR,
-    LocalWorkflowError,
     WORKFLOWS_DIR_ENV,
-    _resolve_build_dir,
-    _resolve_workflows_dir,
+    build_dir_for,
+    build_json_path,
+    resolve_workflows_dir as _resolve_workflows_dir,
 )
 from botcircuits.cli.ansi import C, out
 from botcircuits.cli.config import ConfigError
@@ -625,7 +626,8 @@ def _cmd_build(args: argparse.Namespace) -> int:
         except Exception:
             pass
 
-    build_dir = _resolve_build_dir()
+    built_name = record.get("name") or workflow_name
+    build_dir = build_dir_for(built_name)
     try:
         build_dir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
@@ -635,9 +637,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
         ))
         return 1
 
-    # Mirror the source filename so `<name>.json` in the source aligns
-    # with `<name>.json` in the build dir.
-    build_path = build_dir / source_path.name
+    build_path = build_json_path(built_name)
     _write_workflow(build_path, record)
 
     out(C.dim(
@@ -664,6 +664,25 @@ def _cmd_build(args: argparse.Namespace) -> int:
         ))
     except Exception:
         pass
+
+    # Verification gate — opt-in via the workflow's top-level
+    # `self_repair: true`, best-effort. A generation failure is reported
+    # but never fails the build; the workflow remains runnable without a
+    # gate (see verification/generator.py for the framework/generated-
+    # checks split). Off by default: an author who already builds their
+    # own validate-and-loop-back step into the flow doesn't want a second,
+    # independently-judged gate restarting the whole run out from under it.
+    if record.get("self_repair"):
+        try:
+            from botcircuits.agent.workflow.verification import generate_gate
+            manifest = asyncio.run(generate_gate(record["flow"], built_name, provider))
+            out(C.dim(f"  gate: {len(manifest.get('checks') or [])} check(s) generated"))
+        except Exception as e:
+            out(C.yellow(
+                f"[workflow] gate generation failed: {type(e).__name__}: {e}. "
+                f"The workflow was still built successfully and remains "
+                f"runnable without a gate."
+            ))
 
     out(C.dim(f"(source: {source_path})"))
     out(C.dim(f"(built:  {build_path})"))

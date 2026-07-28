@@ -1,0 +1,11 @@
+{
+  "finding_id": "SEC-2026-0713",
+  "repo": "demo-login-api",
+  "file": "app/server.js",
+  "function": "authenticate",
+  "severity": "critical",
+  "title": "Authentication bypass via unescaped regex password comparison",
+  "description": "authenticate() in app/server.js builds a RegExp directly out of the raw, unescaped `password` request field and uses `RegExp.test()` against the stored password instead of an exact string comparison. Submitting a regex metacharacter string (e.g. \".*\") as the password matches any stored password, letting an attacker log in as any user without knowing their real password.",
+  "remediation_hint": "Replace the RegExp-based comparison with a direct, exact string equality check (e.g. `record.password === password`), after confirming `password` is a string.",
+  "approved_for_auto_patch": true
+}

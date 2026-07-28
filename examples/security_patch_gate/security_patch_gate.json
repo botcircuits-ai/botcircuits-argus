@@ -1,0 +1,40 @@
+{
+  "name": "security_patch_gate",
+  "description": "Load one reported security finding, auto-patch the vulnerable source file if approved, and write a patch report. The build's generated verification gate runs the application's own unit test suite (npm test) as the blocking check that the fix is both correct and non-regressive.",
+  "self_repair": true,
+  "flow": {
+    "start": "start",
+    "steps": {
+      "start": { "type": "start", "next": "load_finding" },
+      "load_finding": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Read the security finding JSON from examples/security_patch_gate/config/finding.json. Capture finding_id, repo, file, function, severity, title, description, remediation_hint, and the approved_for_auto_patch flag as slots."
+        },
+        "next": "write_abort_report",
+        "conditions": [
+          { "condition": "approved_for_auto_patch is true", "next": "patch_vulnerability" }
+        ]
+      },
+      "patch_vulnerability": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Open the vulnerable file (examples/security_patch_gate/ + the file slot) and apply a fix for the vulnerability described in description and remediation_hint. Make the smallest change that closes the hole -- do not restructure unrelated code. Save the file in place. Capture a short patch_summary slot describing exactly what changed."
+        },
+        "next": "write_patch_report"
+      },
+      "write_patch_report": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Write examples/security_patch_gate/patch-report-<today's date, YYYY-MM-DD>.json with finding_id, the patched file, patch_summary, and status: \"patched\"."
+        }
+      },
+      "write_abort_report": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Write examples/security_patch_gate/patch-abort-<today's date, YYYY-MM-DD>.json with finding_id, status: \"aborted\", and the reason: the finding is not approved_for_auto_patch."
+        }
+      }
+    }
+  }
+}

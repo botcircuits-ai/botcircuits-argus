@@ -195,13 +195,25 @@ Author workflows in `.botcircuits/workflows/<name>.json`, then build them:
 uv run botcircuits workflow build --name <workflow_name>
 ```
 
-Built artifacts land in `.botcircuits/workflows/.build/<name>.json` and are the only files the engine loads.
+Built artifacts land in `.botcircuits/workflows/.build/<name>/<name>.json` and are the only files the engine loads.
+
+The build also automatically generates a **verification gate** —
+`.botcircuits/workflows/.build/<name>/verifications/gate.json` plus any
+generated check scripts under `verifications/checks/` — a fixed set of
+deterministic script checks and/or LLM-judge checks derived from the
+workflow's declared result/variables shape.
 
 Run a built workflow:
 
 ```bash
 uv run botcircuits workflow run --name <workflow_name> --initial-args '{"key": "value"}'
 ```
+
+If the workflow has a verification gate, `workflow run` automatically checks
+the run's outcome against it once it completes, and self-repairs by retrying
+the whole workflow (feeding the failure back as context) up to a small fixed
+number of attempts before reporting `failure`. Workflows with no gate are
+unaffected — no extra checks, no extra retries.
 
 ### MCP management
 
@@ -297,7 +309,9 @@ When working with workflows locally, keep the generated artifacts in mind:
 |---|---|
 | `.botcircuits/settings.json` | Runtime config |
 | `.botcircuits/workflows/*.json` | Hand-editable authored sources |
-| `.botcircuits/workflows/.build/*.json` | Built, deterministic state machines (runtime input only) |
+| `.botcircuits/workflows/.build/<name>/<name>.json` | Built, deterministic state machine (runtime input only) |
+| `.botcircuits/workflows/.build/<name>/verifications/gate.json` | Verification gate manifest (auto-generated at build time) |
+| `.botcircuits/workflows/.build/<name>/verifications/checks/*.py` | Generated deterministic check scripts the gate runs |
 | `.botcircuits/workflows/.runs/` | Pause/resume cursors for in-progress runs |
 | `.botcircuits/sessions/*-session.json` | Execution traces consumed by the Manager |
 

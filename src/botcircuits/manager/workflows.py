@@ -16,15 +16,18 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
-from botcircuits.agent.workflow.local import (
+from botcircuits.agent.workflow.paths import (
     BUILD_DIR_NAME,
-    _resolve_build_dir,
-    _resolve_workflows_dir,
+    build_json_path,
+    gate_manifest_path,
+    resolve_build_dir as _resolve_build_dir,
+    resolve_workflows_dir as _resolve_workflows_dir,
 )
 
 #: Same identifier regex the loader enforces — name doubles as filename and
@@ -62,7 +65,10 @@ def _read(path: Path) -> dict[str, Any] | None:
     return doc if isinstance(doc, dict) else None
 
 
-def _summary(name: str, doc: dict[str, Any], *, built: bool, mtime: float) -> dict[str, Any]:
+def _summary(
+    name: str, doc: dict[str, Any], *, built: bool, has_gate: bool, mtime: float,
+    last_gate: dict[str, Any] | None,
+) -> dict[str, Any]:
     """Compact record for the list endpoint (no full flow)."""
     flow = doc.get("flow") or {}
     steps = flow.get("steps") or {}
@@ -71,23 +77,34 @@ def _summary(name: str, doc: dict[str, Any], *, built: bool, mtime: float) -> di
         "description": doc.get("description") or "",
         "step_count": len(steps) if isinstance(steps, dict) else 0,
         "built": built,
+        "has_gate": has_gate,
         "updated_at": mtime,
+        "last_gate": last_gate,
     }
 
 
 def list_workflows() -> list[dict[str, Any]]:
     """All source workflows, newest first, as compact summaries.
 
-    ``built`` reflects whether a ``.build/<name>.json`` counterpart exists, so
-    the UI can flag sources that still need a build before they're runnable.
+    ``built`` reflects whether a ``.build/<name>/<name>.json`` counterpart
+    exists, so the UI can flag sources that still need a build before
+    they're runnable. ``has_gate`` reflects whether that build also
+    carries a generated verification gate. ``last_gate`` is the verdict
+    (pass/fail + attempt/retry counts) from the workflow's most recent run,
+    or ``None`` if it's never run with a gate — a static counterpart to
+    ``has_gate`` that says whether that gate is currently passing.
     """
     src_dir = _resolve_workflows_dir()
     if not src_dir.is_dir():
         return []
     build_dir = _resolve_build_dir()
     built_stems = (
-        {p.stem for p in build_dir.glob("*.json")} if build_dir.is_dir() else set()
+        {p.parent.name for p in build_dir.glob("*/*.json")}
+        if build_dir.is_dir() else set()
     )
+    from botcircuits.manager import store as _session_store
+
+    last_gate_by_name = _session_store.latest_gate_by_workflow()
     out: list[dict[str, Any]] = []
     for path in src_dir.glob("*.json"):
         doc = _read(path)
@@ -97,9 +114,14 @@ def list_workflows() -> list[dict[str, Any]]:
             mtime = path.stat().st_mtime
         except OSError:
             mtime = 0.0
-        out.append(
-            _summary(path.stem, doc, built=path.stem in built_stems, mtime=mtime)
-        )
+        stem = path.stem
+        out.append(_summary(
+            stem, doc,
+            built=stem in built_stems,
+            has_gate=gate_manifest_path(stem).is_file(),
+            mtime=mtime,
+            last_gate=last_gate_by_name.get(doc.get("name") or stem),
+        ))
     out.sort(key=lambda s: s.get("updated_at") or 0, reverse=True)
     return out
 
@@ -139,23 +161,33 @@ def save_workflow(name: str, doc: dict[str, Any]) -> dict[str, Any]:
 
 
 def is_built(name: str) -> bool:
-    """Whether a runnable ``.build/<name>.json`` copy exists for ``name``."""
+    """Whether a runnable ``.build/<name>/<name>.json`` copy exists."""
     _require_name(name)
-    return (_resolve_build_dir() / f"{name}.json").exists()
+    return build_json_path(name).exists()
+
+
+def has_verification(name: str) -> bool:
+    """Whether a verification gate was generated for this workflow's build."""
+    _require_name(name)
+    return gate_manifest_path(name).is_file()
+
+
+def get_verification(name: str) -> dict[str, Any] | None:
+    """The gate manifest (checks list) for ``name``, or ``None`` if it has
+    no gate."""
+    _require_name(name)
+    return _read(gate_manifest_path(name))
 
 
 def delete_workflow(name: str) -> bool:
-    """Delete the source file and any built copy. Returns False if no source."""
+    """Delete the source file and any built copy (including its
+    verification gate). Returns False if no source."""
     _require_name(name)
     path = _source_path(name)
     if not path.exists():
         return False
     path.unlink()
-    built = _resolve_build_dir() / f"{name}.json"
-    try:
-        built.unlink()
-    except OSError:
-        pass
+    shutil.rmtree(_resolve_build_dir() / name, ignore_errors=True)
     return True
 
 
@@ -201,5 +233,8 @@ __all__ = [
     "save_workflow",
     "delete_workflow",
     "build",
+    "is_built",
+    "has_verification",
+    "get_verification",
     "BUILD_DIR_NAME",
 ]

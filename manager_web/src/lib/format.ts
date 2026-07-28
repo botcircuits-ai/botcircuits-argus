@@ -57,6 +57,8 @@ export function eventLabel(type: string): string {
       slot_resolve: "Memory resolve",
       branch: "Branch",
       usage: "Token usage",
+      verification: "Verification",
+      retry: "Retry",
       paused: "Paused",
       session_end: "Session end",
     }[type] ?? type
@@ -73,6 +75,10 @@ export function eventDotColor(type: string): string {
       return "bg-warn";
     case "slot_resolve":
       return "bg-info";
+    case "verification":
+      return "bg-brand-500";
+    case "retry":
+      return "bg-warn";
     case "paused":
       return "bg-warn";
     case "session_end":

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { TraceEvent } from "@/lib/api";
+import type { RetryEventData, TraceEvent, VerificationEventData } from "@/lib/api";
 import { cx, eventDotColor, eventLabel, fmtDuration, fmtTokens } from "@/lib/format";
 
 /**
@@ -231,6 +231,23 @@ function EventCard({ ev }: { ev: TraceEvent }) {
       >
         <span className="text-sm font-medium text-fg">{eventLabel(ev.type)}</span>
         {ev.step && <span className="font-mono text-xs text-muted">{ev.step}</span>}
+        {ev.type === "verification" && (
+          <span
+            className={cx(
+              "text-[10px] font-medium uppercase tracking-wide rounded px-1.5 py-px",
+              (ev.data as any)?.passed
+                ? "bg-ok/15 text-ok"
+                : "bg-danger/15 text-danger",
+            )}
+          >
+            {(ev.data as any)?.passed ? "passed" : "failed"}
+          </span>
+        )}
+        {ev.type === "retry" && (
+          <span className="text-[10px] font-medium uppercase tracking-wide rounded px-1.5 py-px bg-warn/15 text-warn">
+            attempt {(ev.data as any)?.attempt}/{(ev.data as any)?.max_attempts}
+          </span>
+        )}
         <span className="ml-auto text-xs text-muted tabular-nums">#{ev.seq}</span>
         {hasDetail && <span className="text-muted text-xs">{open ? "▾" : "▸"}</span>}
       </button>
@@ -325,6 +342,51 @@ function EventData({ ev }: { ev: TraceEvent }) {
     return (
       <Section title="Resolved memory">
         <KeyVals obj={(d as any).resolved ?? {}} />
+      </Section>
+    );
+  }
+  if (ev.type === "verification") {
+    const v = d as unknown as VerificationEventData;
+    return (
+      <Section title={`Verification · attempt ${v.attempt}`}>
+        <ul className="space-y-1">
+          {(v.checks ?? []).map((c, i) => (
+            <li key={i} className="flex items-start gap-2 text-sm">
+              <span
+                className={cx(
+                  "mt-0.5 h-2 w-2 rounded-full shrink-0",
+                  c.passed ? "bg-ok" : "bg-danger",
+                )}
+              />
+              <span className="font-mono text-xs text-fg">{c.id}</span>
+              <span className="text-[10px] uppercase tracking-wide text-muted">
+                {c.severity}
+              </span>
+              {(c.error || c.detail) && (
+                <span className="text-xs text-muted">{c.error || c.detail}</span>
+              )}
+            </li>
+          ))}
+          {(!v.checks || v.checks.length === 0) && (
+            <li className="text-sm text-muted">No checks.</li>
+          )}
+        </ul>
+      </Section>
+    );
+  }
+  if (ev.type === "retry") {
+    const r = d as unknown as RetryEventData;
+    return (
+      <Section title={`Retry ${r.attempt}/${r.max_attempts}`}>
+        {r.reason && r.reason.length > 0 ? (
+          <ul className="list-disc pl-4 text-sm text-fg space-y-0.5">
+            {r.reason.map((reason, i) => (
+              <li key={i}>{reason}</li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-muted">—</p>
+        )}
       </Section>
     );
   }

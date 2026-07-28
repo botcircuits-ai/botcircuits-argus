@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -32,6 +33,58 @@ from pathlib import Path
 from botcircuits.manager import auth
 
 _POSIX = os.name == "posix"
+
+#: How long to wait, after spawning, for the service to either bind its
+#: port (success) or die (failure — most commonly another process from a
+#: DIFFERENT project already holding that port). Without this check,
+#: `start()` would write a dead PID into the state file and report
+#: success even though nothing new is actually listening — the caller's
+#: browser then keeps talking to whatever old process already owned the
+#: port, which looks like "the manager is pointed at the wrong project."
+_STARTUP_TIMEOUT_SECONDS = 10.0
+_STARTUP_POLL_INTERVAL = 0.15
+
+
+def _port_is_listening(port: int, host: str = "127.0.0.1") -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.2)
+        return s.connect_ex((host, port)) == 0
+
+
+def _wait_for_startup(
+    proc: subprocess.Popen, *, port: int, timeout: float | None = None,
+) -> None:
+    """Block until `proc` either binds `port` or exits, whichever comes
+    first. Raises `SupervisorError` on failure (dead process, or neither
+    happened within `timeout` — e.g. a slow first-time `npm install`
+    compile) so `start()` never reports success for a process that isn't
+    actually serving anything.
+
+    `timeout` defaults to the module-level `_STARTUP_TIMEOUT_SECONDS`,
+    read at CALL time (not as a function-default value bound at import
+    time) so tests can `monkeypatch.setattr(sup,
+    "_STARTUP_TIMEOUT_SECONDS", ...)` and have it actually take effect.
+    """
+    if timeout is None:
+        timeout = _STARTUP_TIMEOUT_SECONDS
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _port_is_listening(port):
+            return
+        if proc.poll() is not None:
+            raise SupervisorError(
+                f"process exited immediately (code {proc.returncode}) instead "
+                f"of binding port {port} — most likely another process "
+                f"(from a different project?) is already using that port. "
+                f"Check `lsof -i :{port}`, or set "
+                f"$BOTCIRCUITS_MANAGER_PORT / $BOTCIRCUITS_MANAGER_WEB_PORT "
+                f"to a free one."
+            )
+        time.sleep(_STARTUP_POLL_INTERVAL)
+    raise SupervisorError(
+        f"timed out after {timeout}s waiting for port {port} to come up "
+        f"(process is still running — check its log)."
+    )
 
 DEFAULT_BACKEND_PORT = 8700
 DEFAULT_FRONTEND_PORT = 3700
@@ -224,6 +277,11 @@ def start(*, backend_only: bool = False, frontend_only: bool = False) -> dict:
             # from the package/repo root would silently read/write the wrong
             # project's workflows and traces.
             proc = _spawn(_backend_cmd(), cwd=Path.cwd(), log_path=log, env=os.environ.copy())
+            try:
+                _wait_for_startup(proc, port=_backend_port())
+            except SupervisorError:
+                _terminate(Service(BACKEND, proc.pid, _pgid_of(proc.pid), 0, str(log)))
+                raise
             state[BACKEND] = Service(
                 BACKEND, proc.pid, _pgid_of(proc.pid), _backend_port(), str(log),
             ).to_dict()
@@ -254,6 +312,13 @@ def start(*, backend_only: bool = False, frontend_only: bool = False) -> dict:
             )
             argv = _frontend_cmd() + ["--", "-p", str(_frontend_port())]
             proc = _spawn(argv, cwd=fe_dir, log_path=log, env=env)
+            try:
+                # Next.js's first cold start can take a while to compile —
+                # a much longer budget than the backend's near-instant bind.
+                _wait_for_startup(proc, port=_frontend_port(), timeout=60.0)
+            except SupervisorError:
+                _terminate(Service(FRONTEND, proc.pid, _pgid_of(proc.pid), 0, str(log)))
+                raise
             state[FRONTEND] = Service(
                 FRONTEND, proc.pid, _pgid_of(proc.pid), _frontend_port(), str(log),
             ).to_dict()

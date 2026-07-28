@@ -34,6 +34,10 @@ class _FakeProc:
         self.argv = argv
         _FakeProc._next += 1
         self.pid = _FakeProc._next
+        self.returncode = None
+
+    def poll(self):
+        return self.returncode
 
 
 @pytest.fixture
@@ -46,6 +50,11 @@ def fake_spawn(monkeypatch):
 
     monkeypatch.setattr(sup, "_spawn", _spawn)
     monkeypatch.setattr(sup, "_pgid_of", lambda pid: pid)
+    # `_wait_for_startup` polls the real network for the port; these fakes
+    # never actually bind anything, so treat every port as immediately "up"
+    # — tests here are about PID-tracking, not real startup detection (see
+    # test_manager_startup_check.py for that).
+    monkeypatch.setattr(sup, "_port_is_listening", lambda port, host="127.0.0.1": True)
     return spawned
 
 

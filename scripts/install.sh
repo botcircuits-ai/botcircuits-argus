@@ -18,7 +18,7 @@ set -euo pipefail
 
 # ── config ─────────────────────────────────────────────────────────────────
 BOTCIRCUITS_HOME="${BOTCIRCUITS_HOME:-$HOME/.botcircuits/app}"
-BOTCIRCUITS_REF="${BOTCIRCUITS_REF:-main}"
+BOTCIRCUITS_REF="${BOTCIRCUITS_REF:-feat/docs-update}"
 BOTCIRCUITS_REPO="${BOTCIRCUITS_REPO:-https://github.com/botcircuits-ai/botcircuits-argus.git}"
 
 # Inherited PYTHONPATH/PYTHONHOME can shadow the install — same fix Hermes uses.

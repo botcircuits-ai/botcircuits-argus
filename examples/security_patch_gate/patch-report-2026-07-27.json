@@ -1,0 +1,6 @@
+{
+  "finding_id": "SEC-2026-0713",
+  "file": "app/server.js",
+  "patch_summary": "Replaced the RegExp-based password comparison in authenticate() with a direct, exact string equality check (record.password === password), closing the regex-metacharacter auth bypass.",
+  "status": "patched"
+}

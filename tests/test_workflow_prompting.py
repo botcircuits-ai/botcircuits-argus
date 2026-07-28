@@ -170,7 +170,7 @@ def test_trigger_args_seed_only_input_variables(tmp_path, monkeypatch):
         },
     }
     monkeypatch.setenv(wf_local.WORKFLOWS_DIR_ENV, str(tmp_path))
-    build = tmp_path / ".build"
+    build = tmp_path / ".build" / "wf_r"
     build.mkdir(parents=True)
     (build / "wf_r.json").write_text(json.dumps(record))
     wf_local._SESSIONS.clear()
@@ -312,7 +312,7 @@ def test_run_request_executes_workflow_without_model_routing(tmp_path, monkeypat
     with text (the clarifying-questions failure mode). The loop's trigger
     must still run the workflow and the transcript must show its result."""
     monkeypatch.setenv(wf_local.WORKFLOWS_DIR_ENV, str(tmp_path))
-    build = tmp_path / ".build"
+    build = tmp_path / ".build" / "ai_trends"
     build.mkdir(parents=True)
     (build / "ai_trends.json").write_text(json.dumps(_action_record()))
     wf_local._SESSIONS.clear()
@@ -364,7 +364,7 @@ def test_missing_inputs_surface_one_deterministic_question(tmp_path, monkeypatch
         },
     }
     monkeypatch.setenv(wf_local.WORKFLOWS_DIR_ENV, str(tmp_path))
-    build = tmp_path / ".build"
+    build = tmp_path / ".build" / "wf_research"
     build.mkdir(parents=True)
     (build / "wf_research.json").write_text(json.dumps(record))
     wf_local._SESSIONS.clear()

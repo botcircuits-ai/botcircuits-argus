@@ -187,6 +187,47 @@ def test_flow_graph_empty_without_flow(sessions_env):
     assert doc["workflow"]["graph"] == {}
 
 
+def test_flow_graph_carries_parallel_branches_and_on_error(sessions_env):
+    """A `parallel` step's `branches`/`onError` must ride into `workflow.graph`
+    unchanged (already step-id references, nothing to compile) so the trace
+    view can draw the fan-out/join edges the same way the authoring canvas
+    does — without this the parallel step's branch steps render as
+    disconnected orphans in the trace graph."""
+    flow = {
+        "start": "start",
+        "steps": {
+            "start": {"type": "start", "next": "fanout"},
+            "fanout": {
+                "type": "parallel",
+                "branches": {
+                    "credit": ["check_credit"],
+                    "inventory": ["check_inventory", "reserve_stock"],
+                },
+                "next": "finish",
+                "onError": "fanout_failed",
+            },
+            "check_credit": {"type": "agentAction", "settings": {"action": "credit"}},
+            "check_inventory": {"type": "agentAction", "settings": {"action": "inv"},
+                                 "next": "reserve_stock"},
+            "reserve_stock": {"type": "agentAction", "settings": {"action": "reserve"}},
+            "finish": {"type": "agentAction", "settings": {"action": "finish"}},
+            "fanout_failed": {"type": "agentAction", "settings": {"action": "fail"}},
+        },
+    }
+    t = SessionTrace.start(workflow_name="wf", runtime="self", initial_slots={}, flow=flow)
+    doc = json.loads(SessionTrace.path_for(t.session_id).read_text())
+    fanout = doc["workflow"]["graph"]["steps"]["fanout"]
+    assert fanout["type"] == "parallel"
+    assert fanout["branches"] == {
+        "credit": ["check_credit"],
+        "inventory": ["check_inventory", "reserve_stock"],
+    }
+    assert fanout["onError"] == "fanout_failed"
+    assert fanout["next"] == "finish"
+    # A non-parallel step never gets these keys.
+    assert "branches" not in doc["workflow"]["graph"]["steps"]["check_credit"]
+
+
 def test_memory_graph_attributes_slots_to_current_step(sessions_env):
     """`action_after` events carry no step id, so produced slots must be
     attributed to the most recent `step_enter` — otherwise the memory graph

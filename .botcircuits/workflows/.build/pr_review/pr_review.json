@@ -1,0 +1,239 @@
+{
+  "name": "pr_review",
+  "description": "Unattended PR review pipeline: audits the diff for security and logic issues, converges the findings, applies fixes, runs the test suite, and merges once green. If the test suite still fails after a fix pass, loops back to the fixer (capped) instead of asking a human.",
+  "flow": {
+    "start": "start",
+    "variables": [
+      {
+        "variableName": "pr_number",
+        "description": "The PR identifier to review, e.g. from a run request like 'run pr review for PR #482'.",
+        "dataType": "string"
+      },
+      {
+        "variableName": "security_findings",
+        "description": "Security issues found in the diff (injection, auth/authz, secrets, unsafe deserialization, SSRF, path traversal, vulnerable dependencies, etc.), one per line with file, line, severity, and the issue.",
+        "dataType": "string"
+      },
+      {
+        "variableName": "logic_findings",
+        "description": "Logic/correctness issues found in the same diff (off-by-one errors, incorrect conditionals, missing edge cases, race conditions, broken control flow, incorrect state mutations, etc.), one per line with file, line, severity, and the issue.",
+        "dataType": "string"
+      },
+      {
+        "variableName": "converged_findings",
+        "description": "security_findings and logic_findings merged into one deduplicated, severity-ordered list of actionable issues.",
+        "dataType": "string"
+      },
+      {
+        "variableName": "findings_present",
+        "description": "Whether converged_findings contains at least one actionable issue.",
+        "dataType": "boolean"
+      },
+      {
+        "variableName": "fix_iteration",
+        "description": "Number of fix/test cycles run so far in this review.",
+        "dataType": "number"
+      },
+      {
+        "variableName": "tests_passed",
+        "description": "Whether the test suite passed on the most recent run.",
+        "dataType": "boolean"
+      },
+      {
+        "variableName": "test_output",
+        "description": "Which tests failed and why, from the most recent test run; guides the next fix pass.",
+        "dataType": "string"
+      },
+      {
+        "variableName": "merged",
+        "description": "Whether the PR was merged.",
+        "dataType": "boolean"
+      }
+    ],
+    "steps": {
+      "start": {
+        "type": "start",
+        "next": "fetch_diff"
+      },
+      "fetch_diff": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Fetch full diff: `gh pr diff <pr_number>`. Retain for audit steps."
+        },
+        "next": "security_audit"
+      },
+      "security_audit": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Audit diff for security vulnerabilities: injection, auth/authz gaps, hardcoded secrets, unsafe deserialization, SSRF, path traversal, insecure dependency use, OWASP-class issues. Write each finding to security_findings with file, line, severity, description. Empty if none found."
+        },
+        "next": "logic_audit"
+      },
+      "logic_audit": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Audit same diff for logic/correctness issues: off-by-one errors, incorrect conditionals, missing/mishandled edge cases, race conditions, broken control flow, incorrect state mutations. Write each finding to logic_findings with file, line, severity, description. Empty if none found."
+        },
+        "next": "converge_findings"
+      },
+      "converge_findings": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Merge security_findings and logic_findings into converged_findings: dedupe, drop non-actionable issues, sort by severity (highest first). Set findings_present=true if converged_findings has ≥1 issue, else false."
+        },
+        "next": "init_fix_state"
+      },
+      "init_fix_state": {
+        "type": "systemAction",
+        "settings": {
+          "action": "Set fix_iteration=0, tests_passed=false, test_output=empty."
+        },
+        "next": "apply_fixes",
+        "conditions": [
+          {
+            "condition": "findings_present is false",
+            "next": "run_tests",
+            "expCondition": "findings_present is false"
+          }
+        ],
+        "choices": [
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "findings_present",
+                "operator": "is",
+                "value": false
+              }
+            ],
+            "next": "run_tests"
+          }
+        ]
+      },
+      "apply_fixes": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Increment fix_iteration by 1. First pass: fix every issue in converged_findings, minimal correct change per issue. Later pass (test_output non-empty): fix only what test_output reports failing. No unrelated changes."
+        },
+        "next": "run_tests"
+      },
+      "run_tests": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Run project test suite. All pass: set tests_passed=true, clear test_output. Otherwise: set tests_passed=false, write failed tests and why to test_output."
+        },
+        "next": "apply_fixes",
+        "conditions": [
+          {
+            "condition": "tests_passed is true",
+            "next": "merge_pr",
+            "expCondition": "tests_passed is true"
+          },
+          {
+            "condition": "fix_iteration equals 3",
+            "next": "escalate_unresolved",
+            "expCondition": "fix_iteration is 3"
+          },
+          {
+            "condition": "fix_iteration exceeds 3",
+            "next": "escalate_unresolved",
+            "expCondition": "fix_iteration greater than 3"
+          }
+        ],
+        "choices": [
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "tests_passed",
+                "operator": "is",
+                "value": true
+              }
+            ],
+            "next": "merge_pr"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "fix_iteration",
+                "operator": "is",
+                "value": 3
+              }
+            ],
+            "next": "escalate_unresolved"
+          },
+          {
+            "operator": "AND",
+            "expressionList": [
+              {
+                "variable": "fix_iteration",
+                "operator": "greater than",
+                "value": 3
+              }
+            ],
+            "next": "escalate_unresolved"
+          }
+        ]
+      },
+      "merge_pr": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Test suite passes. Merge: `gh pr merge <pr_number> --squash`. Set merged=true. Post summary of converged findings fixed before merging."
+        }
+      },
+      "escalate_unresolved": {
+        "type": "agentAction",
+        "settings": {
+          "action": "Fix/test cycle cap (3 iterations) reached without tests passing. Do not merge. Set merged=false. Write escalation report: converged_findings, fixes attempted per iteration, last test_output, for human handoff."
+        }
+      }
+    },
+    "segments": [
+      {
+        "id": "start",
+        "steps": [
+          "fetch_diff",
+          "security_audit",
+          "logic_audit",
+          "converge_findings"
+        ],
+        "branchStep": "init_fix_state",
+        "agent": null
+      },
+      {
+        "id": "run_tests",
+        "steps": [
+          "run_tests"
+        ],
+        "branchStep": "run_tests",
+        "agent": null
+      },
+      {
+        "id": "apply_fixes",
+        "steps": [
+          "apply_fixes",
+          "run_tests"
+        ],
+        "branchStep": "run_tests",
+        "agent": null
+      },
+      {
+        "id": "merge_pr",
+        "steps": [
+          "merge_pr"
+        ],
+        "branchStep": null,
+        "agent": null
+      },
+      {
+        "id": "escalate_unresolved",
+        "steps": [
+          "escalate_unresolved"
+        ],
+        "branchStep": null,
+        "agent": null
+      }
+    ]
+  }
+}

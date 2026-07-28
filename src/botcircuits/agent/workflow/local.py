@@ -9,16 +9,16 @@ Two responsibilities:
     session in process memory keyed by `session_id`, and return a result
     dict the workflow tool can hand back to the LLM.
 
-Layout:
+Layout (see `paths.py` for the single source of truth on path shape):
 
   - Raw, authored workflows live in `$BOTCIRCUITS_WORKFLOWS_DIR` (or
     `.botcircuits/workflows`). This is the source of truth the user
     edits.
   - The CLI `workflow build` command (and `build_workflow` tool) read
     those raw files, run the condition indexer, and emit the runnable
-    output into the `.build/` sub-directory.
+    output into `.build/<name>/<name>.json`.
   - The agent runtime loads only from `.build/` so it always uses
-    built workflows. A raw file with no `.build/` counterpart is
+    built workflows. A raw file with no `.build/<name>/` counterpart is
     skipped with a stderr warning telling the user to run
     `botcircuits-cli workflow build --name=<name>`.
 
@@ -31,7 +31,6 @@ defaults to the filename stem when the field is missing.
 from __future__ import annotations
 
 import json
-import os
 import re
 import sys
 import uuid
@@ -40,6 +39,14 @@ from typing import Any
 
 from botcircuits.providers.base import LLMProvider
 from botcircuits.agent.workflow.engine import run_flow
+from botcircuits.agent.workflow.paths import (
+    BUILD_DIR_NAME,
+    DEFAULT_WORKFLOWS_DIR,
+    WORKFLOWS_DIR_ENV,
+    build_json_path,
+    resolve_build_dir as _resolve_build_dir,
+    resolve_workflows_dir as _resolve_workflows_dir,
+)
 from botcircuits.agent.workflow.slot_resolver import (
     Missing as _Missing,
     coerce_boolean as _coerce_boolean,
@@ -50,13 +57,6 @@ from botcircuits.agent.workflow.slot_resolver import (
 from botcircuits.agent.workflow.variable_normalizer import normalize as normalize_variables
 from botcircuits.agent.workflow.variable_normalizer import variables_for_step
 
-
-WORKFLOWS_DIR_ENV = "BOTCIRCUITS_WORKFLOWS_DIR"
-DEFAULT_WORKFLOWS_DIR = ".botcircuits/workflows"
-# Sub-directory under the workflows dir that holds the built,
-# runnable workflow JSON. `workflow build` writes here; the agent
-# runtime loads from here.
-BUILD_DIR_NAME = ".build"
 
 # Identifier regex for workflow names. Matches OpenAI's tool-name pattern,
 # which is the strictest tool-naming surface the agent talks to.
@@ -71,17 +71,6 @@ _SESSIONS: dict[str, dict[str, Any]] = {}
 
 class LocalWorkflowError(RuntimeError):
     """Raised when a workflow file can't be loaded or run."""
-
-
-def _resolve_workflows_dir() -> Path:
-    """Source directory holding the raw, human-authored workflow files."""
-    raw = os.getenv(WORKFLOWS_DIR_ENV) or DEFAULT_WORKFLOWS_DIR
-    return Path(raw).expanduser().resolve()
-
-
-def _resolve_build_dir() -> Path:
-    """Indexed-workflow output directory the agent runtime reads from."""
-    return _resolve_workflows_dir() / BUILD_DIR_NAME
 
 
 # ---------------------------------------------------------------------------
@@ -163,11 +152,11 @@ def _validate_name(name: Any, source: str) -> str:
 
 
 async def fetch_workflows() -> list[dict]:
-    """Load every built `*.json` file from the build directory.
+    """Load every built `<name>/<name>.json` file from the build directory.
 
-    Reads from `<workflows-dir>/.build/`. Raw workflow files that have
-    no built counterpart are skipped with a stderr warning telling the
-    user to run `workflow build --name=<name>`.
+    Reads from `<workflows-dir>/.build/<name>/`. Raw workflow files that
+    have no built counterpart are skipped with a stderr warning telling
+    the user to run `workflow build --name=<name>`.
 
     A missing build directory yields an empty list rather than erroring
     so an app can opt in by just creating the folder.
@@ -177,14 +166,14 @@ async def fetch_workflows() -> list[dict]:
 
     if source_dir.is_dir():
         built_stems = (
-            {p.stem for p in build_dir.glob("*.json")}
+            {p.parent.name for p in build_dir.glob("*/*.json")}
             if build_dir.is_dir() else set()
         )
         for raw_path in sorted(source_dir.glob("*.json")):
             if raw_path.stem not in built_stems:
                 print(
                     f"[workflow] skipping {raw_path}: no build at "
-                    f"{build_dir / raw_path.name}. Run "
+                    f"{build_json_path(raw_path.stem)}. Run "
                     f"`botcircuits-cli workflow build --name={raw_path.stem}` "
                     f"to build it.",
                     file=sys.stderr,
@@ -194,7 +183,7 @@ async def fetch_workflows() -> list[dict]:
         return []
 
     records: list[dict] = []
-    for path in sorted(build_dir.glob("*.json")):
+    for path in sorted(build_dir.glob("*/*.json")):
         try:
             with path.open("r", encoding="utf-8") as f:
                 record = json.load(f)
@@ -225,13 +214,13 @@ def _load_workflow_record(name: str) -> dict:
     Reads from the build directory only — un-built raw sources are
     not runnable.
 
-    Lookup strategy: try `<build>/<name>.json` first; if that misses,
-    scan every `*.json` in the build dir and match on the record's
+    Lookup strategy: try `<build>/<name>/<name>.json` first; if that
+    misses, scan every `<build>/*/*.json` and match on the record's
     `name` field. The two strategies let authors keep filenames aligned
     with names (the common case) without forcing it.
     """
     directory = _resolve_build_dir()
-    direct = directory / f"{name}.json"
+    direct = build_json_path(name)
 
     if direct.exists():
         with direct.open("r", encoding="utf-8") as f:
@@ -241,7 +230,7 @@ def _load_workflow_record(name: str) -> dict:
         return record
 
     if directory.is_dir():
-        for path in directory.glob("*.json"):
+        for path in directory.glob("*/*.json"):
             try:
                 with path.open("r", encoding="utf-8") as f:
                     record = json.load(f)

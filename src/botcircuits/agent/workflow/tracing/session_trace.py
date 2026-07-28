@@ -28,7 +28,7 @@ Each ``trace`` event is::
 
 Event types (see EventType): ``session_start``, ``step_enter``,
 ``action_before``, ``action_after``, ``slot_resolve``, ``branch``,
-``session_end``.
+``verification``, ``retry``, ``session_end``.
 
 Writing is best-effort and never raises into the run — tracing must not be able
 to break a workflow. Each append rewrites the file atomically (temp + rename),
@@ -64,6 +64,8 @@ class EventType:
     SLOT_RESOLVE = "slot_resolve"
     BRANCH = "branch"
     USAGE = "usage"
+    VERIFICATION = "verification"
+    RETRY = "retry"
     SESSION_END = "session_end"
 
 
@@ -90,16 +92,22 @@ def _flow_graph(flow: dict[str, Any] | None) -> dict[str, Any]:
         {"start": "<step id>",
          "steps": {
             "<id>": {
-              "type": "agentAction|question|start|...",
+              "type": "agentAction|question|start|parallel|...",
               "action": "<slot-free action text>",
               "next": "<default/otherwise next id or null>",
-              "choices": [{"condition": "<NL test>", "next": "<id>"}, ...]
+              "choices": [{"condition": "<NL test>", "next": "<id>"}, ...],
+              # `type: "parallel"` only:
+              "branches": {"<name>": ["<step id>", ...], ...},
+              "onError": "<step id or null>"
             }, ...
          }}
 
     Reads the human-readable `conditions` (the authored NL test) when present,
     falling back to the compiled `choices[].next` so we always know the targets
-    even on a workflow built without conditions echoed back.
+    even on a workflow built without conditions echoed back. A `parallel`
+    step's `branches`/`onError` are passed through as-is (already step-id
+    references, nothing to compile) so the trace view can draw the fan-out/
+    join edges the same way the authoring canvas does.
     """
     if not isinstance(flow, dict):
         return {}
@@ -141,6 +149,17 @@ def _flow_graph(flow: dict[str, Any] | None) -> dict[str, Any]:
             "next": step.get("next"),
             "choices": choices_out,
         }
+        if step.get("type") == "parallel":
+            branches = step.get("branches")
+            if isinstance(branches, dict):
+                steps_out[sid]["branches"] = {
+                    str(name): [s for s in chain if isinstance(s, str)]
+                    for name, chain in branches.items()
+                    if isinstance(chain, list)
+                }
+            on_error = step.get("onError")
+            if isinstance(on_error, str) and on_error:
+                steps_out[sid]["onError"] = on_error
 
     return {"start": flow.get("start"), "steps": steps_out}
 
